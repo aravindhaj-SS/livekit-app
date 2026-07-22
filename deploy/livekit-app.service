@@ -1,0 +1,30 @@
+[Unit]
+Description=LiveKit Gemini Voice Agent (FastAPI/uvicorn, port 8090)
+After=network-online.target
+Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+User=gignaati
+Group=gignaati
+WorkingDirectory=/home/gignaati/Desktop/livekit
+
+ExecStart=/home/gignaati/Desktop/livekit/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8090 --workers 1 --log-level info
+
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=livekit-app
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/gignaati/Desktop/livekit
+
+[Install]
+WantedBy=multi-user.target

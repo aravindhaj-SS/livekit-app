@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mira — Request a Call</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, sans-serif; background: #0f172a; color: #e2e8f0;
+         display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+  form { background: #1e293b; padding: 2rem 2.5rem; border-radius: 12px; width: 340px; }
+  h1 { font-size: 1.2rem; margin: 0 0 1.5rem; }
+  label { font-size: 0.8rem; color: #94a3b8; display: block; margin-bottom: 0.2rem; }
+  input, select { width: 100%; padding: 0.55rem 0.7rem; margin-bottom: 1rem; border-radius: 6px;
+          border: 1px solid #334155; background: #0f172a; color: #e2e8f0; box-sizing: border-box; }
+  button { width: 100%; padding: 0.7rem; border: none; border-radius: 6px; background: #6366f1;
+           color: white; font-weight: 600; cursor: pointer; }
+  button:hover { background: #4f46e5; }
+  #status { margin-top: 1rem; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<form id="f">
+  <h1>Request a call from Mira</h1>
+  <label>Name</label><input name="name" required>
+  <label>Company</label><input name="company" required>
+  <label>Phone number</label><input name="phone_number" placeholder="+91XXXXXXXXXX" required>
+  <label>Interest area</label><input name="interest_area" required>
+  <label>Email</label><input name="email_id" type="email" required>
+  <button type="submit">Call me</button>
+  <div id="status"></div>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target));
+  const statusEl = document.getElementById('status');
+  statusEl.textContent = 'Placing call...';
+  try {
+    const res = await fetch('/api/callback', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data),
+    });
+    const body = await res.json();
+    statusEl.textContent = res.ok ? `Call placed! lead_id=${body.lead_id}` : `Error: ${body.detail?.message || JSON.stringify(body.detail)}`;
+  } catch (err) {
+    statusEl.textContent = 'Error: ' + err;
+  }
+});
+</script>
+</body>
+</html>

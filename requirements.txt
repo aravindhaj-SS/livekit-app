@@ -1,0 +1,39 @@
+# Web framework & server
+fastapi==0.136.1
+uvicorn[standard]==0.46.0
+python-multipart==0.0.27
+
+# WebSocket & async HTTP
+websockets==16.0
+httpx==0.28.1
+
+# Data validation & settings
+pydantic==2.13.3
+pydantic-settings==2.14.0
+
+# Database
+aiosqlite==0.22.1
+
+# Gemini Live (realtime speech-to-speech engine)
+livekit-agents==1.6.6
+livekit-plugins-google==1.6.6
+google-genai==2.12.1
+livekit-plugins-openai==1.6.6
+
+# Audio resampling (8kHz Exotel <-> 16kHz/24kHz Gemini Live)
+numpy==2.4.4
+scipy==1.17.1
+
+# Google Calendar API (discovery call booking)
+# Unpinned/minimum-pinned, not exact — google-genai pulls in a newer
+# google-auth than the exact versions originally tried here, and pip's
+# resolver needs the room to reconcile both. Versions verified working
+# together: google-api-python-client 2.198.0, google-auth 2.55.2,
+# google-auth-httplib2 0.4.0, google-auth-oauthlib 1.4.0.
+google-api-python-client>=2.154.0
+google-auth>=2.38.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.0
+
+# Utilities
+python-dotenv==1.2.2

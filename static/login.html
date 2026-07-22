@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mira Dashboard — Login</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, sans-serif; background: #0f172a; color: #e2e8f0;
+         display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+  form { background: #1e293b; padding: 2rem 2.5rem; border-radius: 12px; width: 280px; }
+  h1 { font-size: 1.2rem; margin: 0 0 1.5rem; }
+  input { width: 100%; padding: 0.6rem 0.7rem; margin-bottom: 1rem; border-radius: 6px;
+          border: 1px solid #334155; background: #0f172a; color: #e2e8f0; box-sizing: border-box; }
+  button { width: 100%; padding: 0.7rem; border: none; border-radius: 6px; background: #6366f1;
+           color: white; font-weight: 600; cursor: pointer; }
+  button:hover { background: #4f46e5; }
+  .error { color: #f87171; font-size: 0.85rem; margin-top: -0.5rem; margin-bottom: 1rem; }
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <h1>Mira — Ops Dashboard</h1>
+  <input name="username" placeholder="Username" autofocus required>
+  <input name="password" type="password" placeholder="Password" required>
+  <button type="submit">Log in</button>
+</form>
+</body>
+</html>

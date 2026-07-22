@@ -1,0 +1,15 @@
+[Unit]
+Description=Cloudflare Tunnel - livekit-app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gignaati
+TimeoutStartSec=15
+ExecStart=/usr/local/bin/cloudflared tunnel --config /home/gignaati/.cloudflared/livekit.config run
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
