@@ -7,3 +7,4 @@ leads.db
 logs/
 .claude/
 recordings/
+token.pkl
