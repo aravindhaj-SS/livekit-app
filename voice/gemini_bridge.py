@@ -30,8 +30,10 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import time
-from datetime import date
+import wave
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import numpy as np
@@ -50,8 +52,8 @@ from agent.lead_state import LeadState
 from agent.prompt import build_instructions
 from core.calendar import book_discovery_call
 from core.config import settings
-from core.costs import compute_call_cost_usd
-from core.database import get_lead, save_meeting_link, update_lead_state
+from core.costs import compute_call_cost
+from core.database import create_inbound_lead, get_lead, save_meeting_link, update_lead_state
 from core.pending_calls import consume as consume_pending_call
 from core.rag import ask as rag_ask
 
@@ -64,10 +66,41 @@ FRAME_MS = 20
 FRAME_SAMPLES = EXOTEL_SAMPLE_RATE * FRAME_MS // 1000  # 160
 FRAME_BYTES = FRAME_SAMPLES * 2  # 320 (16-bit PCM)
 
+# ── Call recordings — self-recorded (see CallSession._write_recording) ──────
+RECORDINGS_DIR = "recordings"
+os.makedirs(RECORDINGS_DIR, exist_ok=True)
+
+# How long to wait after starting a session before assuming the opening line
+# never actually produced audio and retrying it once. Guards against exactly
+# the failure mode that made the agent silent on pickup: a generate_reply()
+# call that gets accepted but the model returns zero audio tokens for it
+# (confirmed in logs — ttft=-1/duration=0.000 on the first turn of nearly
+# every call) or, worse, a model/engine combination where generate_reply()
+# is silently a no-op (e.g. livekit-plugins-google marks mutable_chat_context
+# False for any Gemini model with "3.1" in its name).
+GREETING_CONFIRM_TIMEOUT_S = 6.0
+
 # ── Watchdog / safety-net timers ─────────────────────────────────────────────
 WATCHDOG_TICK_S = 5.0
 SILENCE_REPROMPT_MS = 15_000
 SILENCE_HANGUP_MS = 35_000
+
+# How long to wait, after the agent's own most recent utterance did NOT end in
+# a question, before treating the call as concluded and hanging up. Distinct
+# from — and much shorter than — SILENCE_REPROMPT_MS/SILENCE_HANGUP_MS above,
+# which are for a caller going quiet mid-conversation while a question is
+# still pending (that path is unchanged). This one exists because the only
+# other way this app detects "the call is over" is the model calling
+# save_lead_info(call_complete=True) — which never fires at all whenever
+# DISABLE_TOOLS_FOR_LATENCY_TEST strips tools, and isn't guaranteed even when
+# tools are on. This is a tool-independent, content-based backstop: this
+# app's own CLOSING prompt instruction always ends a finished call with a
+# plain statement, never a question, so "no question + caller says nothing
+# back" is a reliable, low-risk signal the conversation is actually done —
+# confirmed against a real call in leads.db where the agent's last line was
+# a clean goodbye with no trailing "?" and the call just sat open until the
+# caller hung up themselves.
+GRACEFUL_END_SILENCE_MS = 8_000
 
 # Cap on Gemini Live session reconnects per call — a known, currently-
 # unresolved bug pattern in livekit-plugins-google can kill the session
@@ -102,6 +135,40 @@ def _say_exactly(line: str) -> str:
     return f'Say EXACTLY this and nothing else: "{line}"'
 
 
+def _build_opening_line(state: LeadState) -> str:
+    """A literal, deterministic sentence — not a meta-instruction asking the
+    model to compose an opener. The old opening ("This is the very first turn
+    of the call. Speak a short, warm, two-sentence opener: ...") was itself
+    the reason the agent was silent on pickup: it's exactly the kind of
+    freeform instruction that produced zero-audio responses (confirmed in
+    logs — ttft=-1/duration=0.000 on almost every call's first turn) and,
+    separately, generate_reply() is a hard no-op for some realtime models
+    entirely (see GREETING_CONFIRM_TIMEOUT_S above). A literal scripted line
+    is what the reconnect recovery line and the silence reprompt/hangup lines
+    already used successfully — this brings the opening line in line with
+    that, for both directions."""
+    if state.direction == "inbound":
+        return "Thanks for calling Swaran Soft, this is Mira. Can I get your name, please?"
+    name_bit = f", {state.name}" if state.name else ""
+    interest = state.interest_area or "your inquiry"
+    return (
+        f"Hello{name_bit}, this is Mira calling from Swaran Soft about {interest}. "
+        f"Do you have a quick moment to chat?"
+    )
+
+
+def _generate_reply_supported(engine: str, model: str | None) -> bool:
+    """Mirrors livekit-plugins-google's own capability check (realtime_api.py:
+    `mutable = "3.1" not in model`) — generate_reply() is a hard no-op for any
+    Gemini model with "3.1" in its name, confirmed directly in logs
+    ("generate_reply is not compatible with '<model>'"). OpenAI has no such
+    restriction. Used to skip a retry we already know will fail identically,
+    rather than to change what's actually attempted."""
+    if engine != "gemini":
+        return True
+    return "3.1" not in (model or "")
+
+
 class ExotelAudioInput(agent_io.AudioInput):
     """Feeds Exotel's inbound 8kHz PCM16 frames into the AgentSession —
     the roomless equivalent of subscribing to a room participant's track."""
@@ -123,11 +190,12 @@ class ExotelAudioOutput(agent_io.AudioOutput):
     barge-in via clear_buffer(). The roomless equivalent of publishing a
     track into a room."""
 
-    def __init__(self, send_frame, get_sid, on_segment_finished):
+    def __init__(self, send_frame, get_sid, on_segment_finished, on_frame=None):
         super().__init__(label="exotel", capabilities=agent_io.AudioOutputCapabilities(pause=False))
         self._send_frame = send_frame
         self._get_sid = get_sid
         self._on_segment_finished = on_segment_finished
+        self._on_frame = on_frame
         self._buf = bytearray()
         self._next_frame_time: Optional[float] = None
         self._cleared = False
@@ -148,6 +216,8 @@ class ExotelAudioOutput(agent_io.AudioOutput):
         while len(self._buf) >= FRAME_BYTES and not self._cleared:
             chunk = bytes(self._buf[:FRAME_BYTES])
             del self._buf[:FRAME_BYTES]
+            if self._on_frame:
+                self._on_frame(chunk)
             await self._send_frame(chunk)
             self._next_frame_time += FRAME_MS / 1000
             sleep_for = self._next_frame_time - time.monotonic()
@@ -202,15 +272,20 @@ class MiraAgent(Agent):
         name="save_lead_info",
         description=(
             "Call this whenever you learn something new about the lead during "
-            "the call — a budget figure, a timeline, their decision-maker role, "
-            "a confirmed or corrected email, their availability, or that they've "
-            "agreed to a discovery call. Call it as many times as needed through "
-            "the call. When the call is naturally wrapping up, call it once more "
-            "with call_complete=true."
+            "the call — their name or company (inbound calls, where this isn't "
+            "known up front), a budget figure, a timeline, their decision-maker "
+            "role, a confirmed or corrected email, their availability, a "
+            "callback request when they're busy, or that they've agreed to a "
+            "discovery call. Call it as many times as needed through the call. "
+            "When the call is naturally wrapping up, call it once more with "
+            "call_complete=true."
         ),
     )
     async def save_lead_info(
         self,
+        name: str | None = None,
+        company: str | None = None,
+        interest_area: str | None = None,
         budget: str | None = None,
         timeline: str | None = None,
         decision_maker_status: str | None = None,
@@ -218,38 +293,58 @@ class MiraAgent(Agent):
         availability: str | None = None,
         discovery_call_agreed: bool = False,
         out_of_scope: bool = False,
+        callback_requested: bool = False,
+        callback_time: str | None = None,
         call_complete: bool = False,
         notes: str | None = None,
     ) -> str:
         s = self.lead_state
-        if budget:
-            s.budget = budget
-        if timeline:
-            s.timeline = timeline
-        if decision_maker_status:
-            s.decision_maker_status = decision_maker_status
-        if email:
-            s.email_id = email
-            s.email_confirmed = True
-        if availability:
-            s.availability_notes = availability
-            parsed = la.extract_preferred_slot(availability, date.today())
-            if parsed:
-                s.preferred_slot = parsed
-        if discovery_call_agreed:
-            s.discovery_call_agreed = True
-        if out_of_scope:
-            s.out_of_scope = True
-        if notes:
-            s.pain = notes
-        if call_complete:
-            self.call_complete = True
-        logger.info(
-            f"save_lead_info: budget={s.budget!r} timeline={s.timeline!r} "
-            f"dm={s.decision_maker_status!r} email={s.email_id!r} "
-            f"slot={s.preferred_slot!r} discovery_agreed={s.discovery_call_agreed} "
-            f"out_of_scope={s.out_of_scope} call_complete={self.call_complete}"
-        )
+        try:
+            if name:
+                s.name = name
+            if company:
+                s.company = company
+            if interest_area:
+                s.interest_area = interest_area
+            if budget:
+                s.budget = budget
+            if timeline:
+                s.timeline = timeline
+            if decision_maker_status:
+                s.decision_maker_status = decision_maker_status
+            if email:
+                s.email_id = email
+                s.email_confirmed = True
+            if availability:
+                s.availability_notes = availability
+                parsed = la.extract_preferred_slot(availability, date.today())
+                if parsed:
+                    s.preferred_slot = parsed
+            if discovery_call_agreed:
+                s.discovery_call_agreed = True
+            if out_of_scope:
+                s.out_of_scope = True
+            if callback_requested:
+                s.callback_requested = True
+            if callback_time:
+                parsed_callback = la.extract_preferred_slot(callback_time, date.today())
+                s.callback_time = parsed_callback or callback_time
+            if notes:
+                s.pain = notes
+            if call_complete:
+                self.call_complete = True
+            logger.info(
+                f"save_lead_info: name={s.name!r} company={s.company!r} "
+                f"budget={s.budget!r} timeline={s.timeline!r} "
+                f"dm={s.decision_maker_status!r} email={s.email_id!r} "
+                f"slot={s.preferred_slot!r} discovery_agreed={s.discovery_call_agreed} "
+                f"callback_requested={s.callback_requested} callback_time={s.callback_time!r} "
+                f"out_of_scope={s.out_of_scope} call_complete={self.call_complete}"
+            )
+        except Exception:
+            # A tool-call exception must never propagate into the realtime
+            # session — that's how a bad argument turns into a dead line.
+            logger.exception("save_lead_info failed")
         return "ok"
 
     @function_tool(
@@ -265,20 +360,24 @@ class MiraAgent(Agent):
         ),
     )
     async def search_knowledge_base(self, query: str) -> str:
-        resolved_query = query
-        if self.last_rag_topic and len(query.split()) <= 6:
-            resolved_query = f"{self.last_rag_topic} {query}"
-        filters = None
-        interest = (self.lead_state.interest_area or "").lower()
-        if "hir" in interest or "recruit" in interest:
-            filters = {"industry": "recruitment", "solution_type": "recruitment_ai"}
-        context, chunk_ids = await rag_ask(
-            resolved_query, filters=filters, excluded_chunk_ids=list(self.seen_chunk_ids)
-        )
-        self.seen_chunk_ids.extend(chunk_ids)
-        self.last_rag_topic = query
-        logger.info(f"search_knowledge_base: query={query!r} -> {len(context)} chars")
-        return context or "No specific information found in the knowledge base for this."
+        try:
+            resolved_query = query
+            if self.last_rag_topic and len(query.split()) <= 6:
+                resolved_query = f"{self.last_rag_topic} {query}"
+            filters = None
+            interest = (self.lead_state.interest_area or "").lower()
+            if "hir" in interest or "recruit" in interest:
+                filters = {"industry": "recruitment", "solution_type": "recruitment_ai"}
+            context, chunk_ids = await rag_ask(
+                resolved_query, filters=filters, excluded_chunk_ids=list(self.seen_chunk_ids)
+            )
+            self.seen_chunk_ids.extend(chunk_ids)
+            self.last_rag_topic = query
+            logger.info(f"search_knowledge_base: query={query!r} -> {len(context)} chars")
+            return context or "No specific information found in the knowledge base for this."
+        except Exception:
+            logger.exception("search_knowledge_base failed")
+            return "No specific information found in the knowledge base for this."
 
 
 class CallSession:
@@ -297,6 +396,21 @@ class CallSession:
         self._last_activity_at = time.monotonic()
         self._reprompt_fired = False
         self._session_start_t = time.monotonic()
+        self._session_start_wall = datetime.now()
+
+        # Opening-line reliability safety net (see GREETING_CONFIRM_TIMEOUT_S).
+        self._greeting_confirmed = False
+
+        # Self-recorded call audio (issue: playable recording in dashboard).
+        # Both buffers are 8kHz mono PCM16, time-aligned to _recording_start_t
+        # so caller and agent audio land on a shared timeline (the caller
+        # buffer is naturally continuous — Exotel streams inbound audio the
+        # whole call — the agent buffer is silence-padded to the elapsed
+        # wall-clock time on every chunk since it's only ever produced while
+        # speaking).
+        self._recording_start_t: Optional[float] = None
+        self._caller_buf = bytearray()
+        self._agent_buf = bytearray()
 
     async def run(self):
         try:
@@ -321,21 +435,28 @@ class CallSession:
             await self._end()
 
     async def _on_start(self, msg: dict):
+        self._recording_start_t = time.monotonic()
+        self._session_start_wall = datetime.now()
+
         start = msg.get("start", {})
         self._sid = (
             msg.get("stream_sid") or msg.get("streamSid")
             or start.get("stream_sid") or start.get("streamSid") or ""
         )
         params = start.get("custom_parameters") or start.get("customParameters") or {}
-        to_number = start.get("from") or start.get("to") or ""
+        caller_number = start.get("from") or start.get("to") or ""
 
-        lead_id = consume_pending_call(to_number) if to_number else None
+        lead_id = consume_pending_call(caller_number) if caller_number else None
         if lead_id is None:
             lead_id_raw = params.get("custom_identifier") or params.get("lead_id")
             lead_id = int(lead_id_raw) if lead_id_raw else None
 
         lead_row = await get_lead(lead_id) if lead_id else None
+
         if lead_row:
+            # A pre-registered outbound call — api/routes.py's /callback
+            # registered this phone number before dialing, so full identity
+            # is already known.
             self.state = LeadState(
                 name=lead_row.get("name") or "",
                 company=lead_row.get("company") or "",
@@ -343,10 +464,26 @@ class CallSession:
                 interest_area=lead_row.get("interest_area") or "",
                 lead_id=lead_id,
                 email_id=lead_row.get("email_id"),
+                direction="outbound",
             )
         else:
-            logger.warning(f"No lead found for lead_id={lead_id!r} to_number={to_number!r} — using bare state")
-            self.state = LeadState(lead_id=lead_id)
+            # No matching pre-registered outbound call — either a genuine
+            # inbound call (someone dialed the Exophone directly) or an
+            # outbound call whose registration couldn't be matched (e.g. the
+            # 120s pending-call TTL expired before the callee picked up).
+            # Either way, never drop the call silently: create a fresh lead
+            # row so there's always somewhere to persist whatever gets
+            # learned — this used to fall through to a lead_id=None "bare
+            # state" that update_lead_state() then never persisted at all.
+            if lead_id is not None:
+                logger.warning(f"lead_id={lead_id!r} resolved but no matching row — treating as inbound")
+            new_lead_id = await create_inbound_lead(caller_number)
+            self.state = LeadState(lead_id=new_lead_id, phone_number=caller_number, direction="inbound")
+
+        logger.info(
+            f"Call started — direction={self.state.direction} lead_id={self.state.lead_id} "
+            f"phone={caller_number!r}"
+        )
 
         await self._start_agent_session()
 
@@ -363,7 +500,7 @@ class CallSession:
         if settings.DISABLE_TOOLS_FOR_LATENCY_TEST:
             await self._agent.update_tools([])
 
-        # Recorded so compute_call_cost_usd() prices this call against the
+        # Recorded so compute_call_cost() prices this call against the
         # engine that actually handled it, not whichever is currently
         # configured — matters if REALTIME_ENGINE changes between calls.
         self.state.call_metrics["engine"] = settings.REALTIME_ENGINE
@@ -413,6 +550,7 @@ class CallSession:
             send_frame=self._send_frame,
             get_sid=lambda: self._sid,
             on_segment_finished=self._on_segment_finished,
+            on_frame=self._record_agent_frame,
         )
 
         self._agent_session.input.audio = self._audio_input
@@ -423,21 +561,15 @@ class CallSession:
 
         await self._agent_session.start(self._agent)
 
-        if recovery_line:
-            instructions = _say_exactly(recovery_line)
-        else:
-            instructions = (
-                f"This is the very first turn of the call. Speak a short, warm, two-"
-                f"sentence opener: sentence 1 introduces yourself as Mira from Swaran "
-                f"Soft and references that this call is about "
-                f"{self.state.interest_area or 'their inquiry'}; sentence 2 asks a "
-                f"plain yes/no availability question like 'do you have a quick moment "
-                f"to chat?'. Do not pitch anything yet."
-            )
+        # Literal, deterministic line — not a meta-instruction (see
+        # _build_opening_line's docstring for why that used to be silent).
+        opening_line = recovery_line or _build_opening_line(self.state)
+        self._greeting_confirmed = False
         try:
-            self._agent_session.generate_reply(instructions=instructions)
+            self._agent_session.generate_reply(instructions=_say_exactly(opening_line))
         except Exception:
             logger.exception("Opening generate_reply failed")
+        asyncio.create_task(self._greeting_watchdog(opening_line))
 
     def _on_agent_session_error(self, ev):
         logger.error(f"AgentSession error: {ev}")
@@ -483,6 +615,49 @@ class CallSession:
         finally:
             self._reconnecting = False
 
+    async def _greeting_watchdog(self, opening_line: str):
+        """Safety net for the exact failure mode that made the agent silent
+        on pickup: fire once, GREETING_CONFIRM_TIMEOUT_S after the opening
+        generate_reply() call, and if no agent audio has been produced yet
+        (_record_agent_frame never ran), retry the same line once. Covers a
+        genuinely empty first response. Does NOT retry when the active
+        engine/model is known to reject generate_reply() outright (e.g. any
+        Gemini model with "3.1" in its name) — retrying a call that's
+        guaranteed to fail identically just adds log noise, not a chance of
+        success. In that case the caller stays on a silent line until they
+        speak, exactly as today, until issue #1's remaining open question
+        (see conversation) is resolved."""
+        await asyncio.sleep(GREETING_CONFIRM_TIMEOUT_S)
+        if self._ended or self._greeting_confirmed or not self._agent_session:
+            return
+        metrics = self.state.call_metrics if self.state else {}
+        if not _generate_reply_supported(metrics.get("engine", "openai"), metrics.get("model")):
+            logger.warning(
+                f"No agent audio {GREETING_CONFIRM_TIMEOUT_S}s after session start, but "
+                f"'{metrics.get('model')}' doesn't support generate_reply() — not retrying a call "
+                f"that's guaranteed to fail identically."
+            )
+            return
+        logger.warning(f"No agent audio {GREETING_CONFIRM_TIMEOUT_S}s after session start — retrying opening line")
+        try:
+            self._agent_session.generate_reply(instructions=_say_exactly(opening_line))
+        except Exception:
+            logger.exception("Greeting retry failed")
+
+    def _record_agent_frame(self, chunk: bytes):
+        """Called for every 20ms Exotel-bound agent audio chunk — feeds the
+        self-recorded call audio (silence-padded to stay aligned with the
+        caller channel's continuous timeline) and doubles as the "has the
+        agent said anything yet" signal for _greeting_watchdog."""
+        self._greeting_confirmed = True
+        if self._recording_start_t is None:
+            return
+        elapsed = time.monotonic() - self._recording_start_t
+        target_len = int(elapsed * EXOTEL_SAMPLE_RATE) * 2
+        if len(self._agent_buf) < target_len:
+            self._agent_buf.extend(b"\x00" * (target_len - len(self._agent_buf)))
+        self._agent_buf.extend(chunk)
+
     async def _on_media(self, msg: dict):
         if not self._audio_input:
             return
@@ -497,6 +672,7 @@ class CallSession:
             data=pcm8k.tobytes(), sample_rate=EXOTEL_SAMPLE_RATE, num_channels=1, samples_per_channel=pcm8k.size,
         )
         self._audio_input.push(frame)
+        self._caller_buf.extend(pcm8k.tobytes())
 
         rms = float(np.sqrt(np.mean(pcm8k.astype(np.float32) ** 2))) if pcm8k.size else 0.0
         if rms > 300:
@@ -534,6 +710,28 @@ class CallSession:
             logger.exception("Failed to extract transcript from session history")
             return []
 
+    def _last_assistant_turn_was_a_statement(self) -> bool:
+        """True when the agent's most recent utterance did NOT end in a
+        question — this app's own CLOSING prompt instruction always ends a
+        finished call with a plain statement ("Thank you for your time...")
+        never a question, so this is how _watchdog_loop tells "conversation
+        genuinely concluded" apart from "caller is just thinking about the
+        question I just asked them." Tool-independent — works whether or not
+        save_lead_info is available this call."""
+        if not self._agent_session:
+            return False
+        try:
+            messages = [
+                m for m in self._agent_session.history.messages()
+                if m.role == "assistant" and m.text_content
+            ]
+            if not messages:
+                return False
+            return "?" not in messages[-1].text_content.strip()
+        except Exception:
+            logger.exception("Failed to inspect last assistant turn")
+            return False
+
     def _on_segment_finished(self):
         if self._agent and self._agent.call_complete and not self._ended:
             asyncio.create_task(self._end())
@@ -552,7 +750,9 @@ class CallSession:
         per-call cost estimate (core/costs.py), and logs per-response
         ttft/duration — the actual model latency numbers, isolated from
         conversation content (unlike the tool-call timestamps elsewhere in
-        this log, which include however long the caller spent talking)."""
+        this log, which include however long the caller spent talking).
+        Valid ttft values (time-to-first-audio-token) are also accumulated
+        for the dashboard's avg-latency-per-turn figure — see _end()."""
         if not self.state:
             return
         m = getattr(ev, "metrics", ev)
@@ -560,6 +760,8 @@ class CallSession:
         duration = getattr(m, "duration", None)
         if ttft is not None:
             logger.info(f"realtime turn latency: ttft={ttft:.3f}s duration={duration:.3f}s")
+            if ttft >= 0:
+                self.state.call_metrics.setdefault("latencies", []).append(float(ttft))
         itd = getattr(m, "input_token_details", None)
         otd = getattr(m, "output_token_details", None)
         if itd is None and otd is None:
@@ -589,6 +791,21 @@ class CallSession:
             if not self._agent_session or self._agent_session.agent_state != "listening":
                 continue
             idle_ms = (time.monotonic() - self._last_activity_at) * 1000
+
+            # Tool-independent graceful-end detection (see
+            # _last_assistant_turn_was_a_statement docstring) — checked before,
+            # and separately from, the mid-conversation reprompt/hangup timers
+            # below, which are unchanged and still apply whenever the agent's
+            # last turn WAS a question (i.e. the caller is just thinking, not
+            # done with the call).
+            if idle_ms >= GRACEFUL_END_SILENCE_MS and self._last_assistant_turn_was_a_statement():
+                logger.info(
+                    "Agent's last utterance wasn't a question and the caller has gone quiet — "
+                    "treating the call as concluded and hanging up."
+                )
+                await self._end()
+                return
+
             if not self._reprompt_fired and idle_ms >= SILENCE_REPROMPT_MS:
                 self._reprompt_fired = True
                 self._agent_session.generate_reply(instructions=_say_exactly(_SILENCE_REPROMPT_LINE))
@@ -602,6 +819,38 @@ class CallSession:
 
     # ── Teardown ─────────────────────────────────────────────────────────────
 
+    def _write_recording(self) -> Optional[str]:
+        """Mixes the caller and agent 8kHz mono buffers into a single stereo
+        WAV (left=caller, right=agent) and writes it to RECORDINGS_DIR. Self-
+        recorded rather than relying on Exotel's own recording feature — no
+        extra Exotel cost/config, and we already have both raw PCM streams
+        in this process. Returns the file path, or None if there's nothing
+        to write (e.g. the call ended before any audio arrived)."""
+        if not self._caller_buf and not self._agent_buf:
+            return None
+        try:
+            n = max(len(self._caller_buf), len(self._agent_buf))
+            n -= n % 2  # keep it a whole number of int16 samples
+            caller = bytes(self._caller_buf).ljust(n, b"\x00")[:n]
+            agent = bytes(self._agent_buf).ljust(n, b"\x00")[:n]
+            caller_arr = np.frombuffer(caller, dtype="<i2")
+            agent_arr = np.frombuffer(agent, dtype="<i2")
+            stereo = np.empty(caller_arr.size * 2, dtype="<i2")
+            stereo[0::2] = caller_arr
+            stereo[1::2] = agent_arr
+
+            lead_id = self.state.lead_id if self.state else "unknown"
+            path = os.path.join(RECORDINGS_DIR, f"{lead_id}.wav")
+            with wave.open(path, "wb") as wf:
+                wf.setnchannels(2)
+                wf.setsampwidth(2)
+                wf.setframerate(EXOTEL_SAMPLE_RATE)
+                wf.writeframes(stereo.tobytes())
+            return path
+        except Exception:
+            logger.exception("Failed to write call recording")
+            return None
+
     async def _end(self):
         if self._ended:
             return
@@ -613,11 +862,23 @@ class CallSession:
         s = self.state
         if s and s.lead_id:
             s.call_metrics["call_duration_s"] = round(time.monotonic() - self._session_start_t, 1)
-            s.call_metrics["cost_usd"] = compute_call_cost_usd(
+
+            latencies = s.call_metrics.get("latencies") or []
+            if latencies:
+                s.call_metrics["avg_latency_s"] = round(sum(latencies) / len(latencies), 3)
+
+            recording_path = self._write_recording()
+            if recording_path:
+                s.call_metrics["recording_path"] = recording_path
+
+            s.call_metrics.update(compute_call_cost(
                 s.call_metrics.get("usage", {}),
                 engine=s.call_metrics.get("engine", "openai"),
                 model=s.call_metrics.get("model"),
-            )
+                call_duration_s=s.call_metrics["call_duration_s"],
+                direction=s.direction,
+            ))
+
             transcript = self._extract_transcript()
 
             # Background reconciliation: fill in anything the model's own
@@ -633,12 +894,20 @@ class CallSession:
             if not s.email_id:
                 s.email_id = found["email_id"]
 
+            # Busy/callback: if the lead was flagged as wanting a callback but
+            # never gave (or the model never captured) a specific time,
+            # default to the same time the next day.
+            if s.callback_requested and not s.callback_time:
+                fallback = self._session_start_wall + timedelta(days=1)
+                s.callback_time = fallback.isoformat()
+                logger.info(f"Callback requested with no time given — defaulting to {s.callback_time}")
+
             if s.classification is None:
                 if s.out_of_scope:
                     s.classification = "Cold"
                 elif s.discovery_call_agreed:
                     s.classification = "Hot"
-                elif s.budget or s.timeline or s.decision_maker_status:
+                elif s.budget or s.timeline or s.decision_maker_status or s.callback_requested:
                     s.classification = "Warm"
 
             await update_lead_state(s.lead_id, s.to_dict(), s.classification, transcript=transcript)

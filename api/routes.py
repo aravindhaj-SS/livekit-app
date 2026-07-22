@@ -4,13 +4,13 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Cookie, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from agent.lead_agent import classify_in_scope_form
 from core.config import settings
 from core.dashboard_auth import dash_token_valid
-from core.database import get_all_leads, save_lead
+from core.database import get_all_leads, get_lead, save_lead
 from core.pending_calls import register as register_pending_call
 
 router = APIRouter()
@@ -106,13 +106,17 @@ async def list_leads():
 
 
 @router.get("/calls")
-async def list_calls(dash_auth: Optional[str] = Cookie(default=None)):
-    """Feeds the /dashboard UI. Gated by the same cookie as /dashboard itself
-    since this exposes full call transcripts and lead PII."""
+async def list_calls(direction: Optional[str] = None, dash_auth: Optional[str] = Cookie(default=None)):
+    """Feeds the /dashboard (outbound) and /dashboard/inbound UIs. Gated by
+    the same cookie as those pages since this exposes full call transcripts
+    and lead PII. direction=outbound|inbound filters to one dashboard's
+    rows; omitted returns everything."""
     if not dash_token_valid(dash_auth):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if direction not in (None, "inbound", "outbound"):
+        raise HTTPException(status_code=400, detail="direction must be 'inbound' or 'outbound'")
 
-    leads = await get_all_leads()
+    leads = await get_all_leads(direction=direction)
     calls = []
     for lead in leads:
         try:
@@ -123,8 +127,10 @@ async def list_calls(dash_auth: Optional[str] = Cookie(default=None)):
             lead_state = json.loads(lead["lead_state"]) if lead.get("lead_state") else None
         except (TypeError, ValueError):
             lead_state = None
+        metrics = (lead_state or {}).get("call_metrics") or {}
         calls.append({
             "id": lead.get("id"),
+            "direction": lead.get("direction") or "outbound",
             "name": lead.get("name"),
             "company": lead.get("company"),
             "phone_number": lead.get("phone_number"),
@@ -137,10 +143,43 @@ async def list_calls(dash_auth: Optional[str] = Cookie(default=None)):
             "budget": lead.get("budget"),
             "timeline": lead.get("timeline"),
             "decision_maker_status": lead.get("decision_maker_status"),
+            "callback_time": lead.get("callback_time"),
+            # AI-model token cost (USD) — see core/costs.py.
             "cost_usd": lead.get("cost_usd"),
+            # Exotel telephony leg (INR, per-minute rate x whole minutes).
+            "exotel_cost_inr": lead.get("exotel_cost_inr"),
+            # Blended total (INR) — cost_usd converted via settings.USD_TO_INR
+            # plus exotel_cost_inr. See core/costs.py.compute_call_cost.
+            "total_cost_inr": lead.get("total_cost_inr"),
+            "avg_latency_s": lead.get("avg_latency_s"),
+            "recording_url": f"/api/recordings/{lead['id']}" if lead.get("recording_path") else None,
+            # Which engine/model this call's cost was actually priced against
+            # (core/costs.py's rate table is keyed on this pair) — surfaced so
+            # the token/cost figures below can be cross-checked against the
+            # rate that was actually applied.
+            "engine": metrics.get("engine"),
+            "model": metrics.get("model"),
+            # Raw per-call token counts (see voice/gemini_bridge.py's
+            # _on_metrics_collected) — the exact inputs to compute_call_cost(),
+            # so cost_usd can be independently recomputed and cross-checked.
+            "usage": metrics.get("usage"),
             "created_at": lead.get("created_at"),
             "updated_at": lead.get("updated_at"),
             "transcript": transcript,
             "lead_state": lead_state,
         })
     return JSONResponse(calls)
+
+
+@router.get("/recordings/{lead_id}")
+async def get_recording(lead_id: int, dash_auth: Optional[str] = Cookie(default=None)):
+    """Streams a call's self-recorded WAV (see voice/gemini_bridge.py's
+    _write_recording). Gated the same way as /api/calls — recordings aren't
+    served from a public static path. The path served is always the one
+    recorded in the DB for this lead_id, never a client-supplied path."""
+    if not dash_token_valid(dash_auth):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    lead = await get_lead(lead_id)
+    if not lead or not lead.get("recording_path"):
+        raise HTTPException(status_code=404, detail="No recording for this call")
+    return FileResponse(lead["recording_path"], media_type="audio/wav")

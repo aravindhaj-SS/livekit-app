@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Mira — Outbound Calls</title>
+<title>Mira — Inbound Calls</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: -apple-system, Segoe UI, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; }
@@ -91,19 +91,19 @@
 <header>
   <h1>Mira — Calls</h1>
   <nav>
-    <a href="/dashboard" class="active">Outbound</a>
-    <a href="/dashboard/inbound">Inbound</a>
+    <a href="/dashboard">Outbound</a>
+    <a href="/dashboard/inbound" class="active">Inbound</a>
     <a href="/logout">Log out</a>
   </nav>
 </header>
 <div id="wrap">
   <table>
     <thead>
-      <tr><th>Name</th><th>Company</th><th>Classification</th><th>Meeting</th><th>Cost</th></tr>
+      <tr><th>Name</th><th>Budget</th><th>Timeline</th><th>Decision Maker</th><th>Meeting</th></tr>
     </thead>
     <tbody id="rows"></tbody>
   </table>
-  <div class="empty" id="empty" style="display:none">No outbound calls yet.</div>
+  <div class="empty" id="empty" style="display:none">No inbound calls yet.</div>
 </div>
 
 <div id="overlay" onclick="closeDetail()"></div>
@@ -120,18 +120,18 @@
 let calls = [];
 
 async function load() {
-  const res = await fetch('/api/calls?direction=outbound');
+  const res = await fetch('/api/calls?direction=inbound');
   if (res.status === 401) { window.location = '/login'; return; }
   calls = await res.json();
   const rows = document.getElementById('rows');
   document.getElementById('empty').style.display = calls.length ? 'none' : 'block';
   rows.innerHTML = calls.map((c, i) => `
     <tr onclick="openDetail(${i})">
-      <td class="name">${esc(c.name) || '<span class="muted">—</span>'}</td>
-      <td>${esc(c.company) || '<span class="muted">—</span>'}</td>
-      <td>${c.classification ? `<span class="tag ${c.classification}">${c.classification}</span>` : '<span class="muted">—</span>'}</td>
+      <td class="name">${esc(c.name) || '<span class="muted">Unknown caller</span>'}</td>
+      <td>${esc(c.budget) || '<span class="muted">—</span>'}</td>
+      <td>${esc(c.timeline) || '<span class="muted">—</span>'}</td>
+      <td>${esc(c.decision_maker_status) || '<span class="muted">—</span>'}</td>
       <td>${meetingBadge(c)}</td>
-      <td>${totalCost(c)}</td>
     </tr>
   `).join('');
 }
@@ -142,11 +142,6 @@ function meetingBadge(c) {
   }
   if (c.discovery_call_scheduled) return `<span class="badge yes">✓ booked</span>`;
   return `<span class="badge no">—</span>`;
-}
-
-function totalCost(c) {
-  if (c.total_cost_inr == null) return '<span class="muted">—</span>';
-  return '₹' + Number(c.total_cost_inr).toFixed(2);
 }
 
 function esc(v) {
@@ -161,7 +156,7 @@ function fmt(v, fallback) {
 function openDetail(i) {
   const c = calls[i];
   document.getElementById('d-name').textContent = c.name || 'Unknown caller';
-  document.getElementById('d-sub').textContent = [c.company, c.phone_number].filter(Boolean).join(' · ');
+  document.getElementById('d-sub').textContent = [c.phone_number, c.classification].filter(Boolean).join(' · ');
 
   const aiCost = c.cost_usd != null ? '$' + Number(c.cost_usd).toFixed(4) : '—';
   const exotelCost = c.exotel_cost_inr != null ? '₹' + Number(c.exotel_cost_inr).toFixed(2) : '—';
@@ -203,7 +198,7 @@ function openDetail(i) {
 
   document.getElementById('d-body').innerHTML = `
     <div class="section">
-      <h3>Interest</h3>
+      <h3>Caller</h3>
       <dl class="kv">
         <dt>Interest area</dt><dd>${fmt(c.interest_area)}</dd>
         <dt>Email</dt><dd>${fmt(c.email_id)}</dd>

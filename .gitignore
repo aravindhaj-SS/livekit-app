@@ -6,3 +6,4 @@ credentials.json
 leads.db
 logs/
 .claude/
+recordings/

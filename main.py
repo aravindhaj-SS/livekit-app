@@ -74,3 +74,10 @@ async def dashboard_page(dash_auth: str | None = Cookie(default=None)):
     if not dash_token_valid(dash_auth):
         return RedirectResponse(url="/login")
     return FileResponse("static/dashboard.html")
+
+
+@app.get("/dashboard/inbound")
+async def dashboard_inbound_page(dash_auth: str | None = Cookie(default=None)):
+    if not dash_token_valid(dash_auth):
+        return RedirectResponse(url="/login")
+    return FileResponse("static/dashboard_inbound.html")

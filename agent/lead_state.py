@@ -13,6 +13,7 @@ class LeadState:
     phone_number: str = ""
     interest_area: str = ""
     lead_id: Optional[int] = None
+    direction: str = "outbound"
 
     pain: Optional[str] = None
     budget: Optional[str] = None
@@ -31,6 +32,10 @@ class LeadState:
     classification: Optional[str] = None
     out_of_scope: bool = False
     call_complete: bool = False
+
+    # Busy-now / callback handling (outbound and inbound).
+    callback_requested: bool = False
+    callback_time: Optional[str] = None
 
     call_metrics: dict = field(default_factory=lambda: {"call_duration_s": 0.0})
 

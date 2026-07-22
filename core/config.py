@@ -60,6 +60,18 @@ class Settings(BaseSettings):
     # answers from the model's general knowledge. Nothing to run for it to work.
     RAG_PORT: int = 8006
 
+    # ── Telephony (Exotel) per-minute billing — dashboard cost estimate ────────
+    # Flat per-minute rates from the Exotel account's own rate card, billed in
+    # whole-minute pulses (rounded up), same as a phone bill. These are separate
+    # from, and additive with, the Gemini/OpenAI per-token cost in core/costs.py.
+    EXOTEL_COST_PER_MIN_INBOUND_INR: float = 0.22
+    EXOTEL_COST_PER_MIN_OUTBOUND_INR: float = 0.60
+
+    # Approximate, manually-set conversion used ONLY to combine the USD model
+    # cost with the INR telephony cost into one dashboard "Total" figure — not
+    # a live FX rate, not billing-accurate. Update as needed.
+    USD_TO_INR: float = 87.5
+
     # ── Dashboard login (/login, /dashboard) ──────────────────────────────────
     DASHBOARD_ADMIN_USERNAME: str = "admin"
     DASHBOARD_ADMIN_PASSWORD: str = "admin_123"

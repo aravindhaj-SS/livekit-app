@@ -8,6 +8,19 @@ import aiosqlite
 logger = logging.getLogger(__name__)
 DB_PATH = "leads.db"
 
+# Columns added after the original schema — applied via ALTER TABLE at
+# startup so an existing leads.db upgrades in place instead of needing a
+# manual migration.
+_ADDED_COLUMNS = [
+    ("cost_usd", "REAL"),
+    ("direction", "TEXT DEFAULT 'outbound'"),
+    ("exotel_cost_inr", "REAL"),
+    ("total_cost_inr", "REAL"),
+    ("avg_latency_s", "REAL"),
+    ("recording_path", "TEXT"),
+    ("callback_time", "TEXT"),
+]
+
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -28,30 +41,33 @@ async def init_db():
                 timeline TEXT,
                 decision_maker_status TEXT,
                 meeting_link TEXT,
-                cost_usd REAL,
                 created_at TEXT,
                 updated_at TEXT
             )
         """)
         await db.commit()
 
-        # Migrate pre-existing databases that predate this column.
-        try:
-            await db.execute("ALTER TABLE leads ADD COLUMN cost_usd REAL")
-            await db.commit()
-        except Exception:
-            pass  # column already exists
+        for column, col_type in _ADDED_COLUMNS:
+            try:
+                await db.execute(f"ALTER TABLE leads ADD COLUMN {column} {col_type}")
+                await db.commit()
+            except Exception:
+                pass  # column already exists
     logger.info("Database initialised")
 
 
 async def save_lead(lead_data: dict) -> int:
+    """Outbound path only — the lead already submitted a form before the call
+    was placed (api/routes.py's /callback). Inbound leads are created by
+    create_inbound_lead() instead, at call start, since nothing is known yet."""
     async with aiosqlite.connect(DB_PATH) as db:
         now = datetime.utcnow().isoformat()
         cursor = await db.execute(
             """
             INSERT INTO leads
-                (name, company, phone_number, interest_area, preferred_language, email_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (name, company, phone_number, interest_area, preferred_language, email_id,
+                 direction, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'outbound', ?, ?)
             """,
             (
                 lead_data.get("name"),
@@ -68,24 +84,50 @@ async def save_lead(lead_data: dict) -> int:
         return cursor.lastrowid
 
 
+async def create_inbound_lead(phone_number: str) -> int:
+    """Called the moment an inbound call connects — nothing is known about
+    the caller yet except their number; name/company/interest are filled in
+    live via the save_lead_info tool and persisted at call end."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        now = datetime.utcnow().isoformat()
+        cursor = await db.execute(
+            """
+            INSERT INTO leads (phone_number, direction, created_at, updated_at)
+            VALUES (?, 'inbound', ?, ?)
+            """,
+            (phone_number, now, now),
+        )
+        await db.commit()
+        lead_id = cursor.lastrowid
+    logger.info(f"Inbound lead created — lead_id={lead_id} phone={phone_number!r}")
+    return lead_id
+
+
 async def update_lead_state(
     lead_id: int,
     state: dict,
     classification: Optional[str] = None,
     transcript: Optional[list] = None,
 ):
+    metrics = state.get("call_metrics") or {}
     async with aiosqlite.connect(DB_PATH) as db:
         now = datetime.utcnow().isoformat()
         await db.execute(
             """UPDATE leads SET
+               name = COALESCE(?, name), company = COALESCE(?, company),
+               interest_area = COALESCE(?, interest_area),
                lead_state = ?, classification = ?,
                email_id = ?, discovery_call_scheduled = ?,
                transcript = ?,
                budget = ?, timeline = ?, decision_maker_status = ?,
-               cost_usd = ?,
+               cost_usd = ?, exotel_cost_inr = ?, total_cost_inr = ?,
+               avg_latency_s = ?, recording_path = ?, callback_time = ?,
                updated_at = ?
                WHERE id = ?""",
             (
+                state.get("name") or None,
+                state.get("company") or None,
+                state.get("interest_area") or None,
                 json.dumps(state),
                 classification,
                 state.get("email_id"),
@@ -94,7 +136,12 @@ async def update_lead_state(
                 state.get("budget"),
                 state.get("timeline"),
                 state.get("decision_maker_status"),
-                (state.get("call_metrics") or {}).get("cost_usd"),
+                metrics.get("ai_cost_usd"),
+                metrics.get("exotel_cost_inr"),
+                metrics.get("total_cost_inr"),
+                metrics.get("avg_latency_s"),
+                metrics.get("recording_path"),
+                state.get("callback_time"),
                 now,
                 lead_id,
             ),
@@ -124,9 +171,15 @@ async def get_lead(lead_id: int) -> Optional[dict]:
             return dict(row) if row else None
 
 
-async def get_all_leads() -> list[dict]:
+async def get_all_leads(direction: Optional[str] = None) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM leads ORDER BY created_at DESC") as cursor:
+        if direction:
+            query = "SELECT * FROM leads WHERE direction = ? ORDER BY created_at DESC"
+            params = (direction,)
+        else:
+            query = "SELECT * FROM leads ORDER BY created_at DESC"
+            params = ()
+        async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
