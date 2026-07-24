@@ -11,6 +11,7 @@ from agent.lead_agent import classify_in_scope_form
 from core.config import settings
 from core.dashboard_auth import dash_token_valid
 from core.database import get_all_leads, get_lead, save_lead
+from core.model_config import MODEL_CATALOG, current_selection, set_engine_and_model
 from core.pending_calls import register as register_pending_call
 
 router = APIRouter()
@@ -169,6 +170,50 @@ async def list_calls(direction: Optional[str] = None, dash_auth: Optional[str] =
             "lead_state": lead_state,
         })
     return JSONResponse(calls)
+
+
+class ModelSelectionRequest(BaseModel):
+    engine: str
+    model: str
+
+
+@router.get("/models")
+async def list_models(dash_auth: Optional[str] = Cookie(default=None)):
+    """Feeds the dashboards' Models picker: the full catalog (see
+    core/model_config.py — every entry is a real, verified model for its
+    provider) plus which one is currently selected for each direction."""
+    if not dash_token_valid(dash_auth):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return JSONResponse({"catalog": MODEL_CATALOG, "selection": current_selection()})
+
+
+@router.post("/models/{direction}")
+async def select_model(
+    direction: str, body: ModelSelectionRequest, dash_auth: Optional[str] = Cookie(default=None)
+):
+    """Saves a new engine/model for one call direction. No restart needed:
+    get_engine_and_model() (core/model_config.py) re-reads
+    runtime_model_config.json from disk on every single call, with no
+    caching layer anywhere — the very next call already picks up whatever
+    was just saved here. A previous version of this endpoint triggered a
+    full process restart "so it takes effect", which was never actually
+    necessary given that re-read-per-call behavior, and had a real cost:
+    it drops any call already in progress the instant systemd relaunches
+    the process (confirmed in production logs — a live inbound call lost
+    all of its captured data mid-conversation when a model switch elsewhere
+    restarted the process out from under it). Removed rather than kept
+    "just in case" — the mechanism it existed for doesn't need it."""
+    if not dash_token_valid(dash_auth):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if direction not in ("inbound", "outbound"):
+        raise HTTPException(status_code=400, detail="direction must be 'inbound' or 'outbound'")
+
+    try:
+        set_engine_and_model(direction, body.engine, body.model)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {"status": "saved", "direction": direction, "engine": body.engine, "model": body.model}
 
 
 @router.get("/recordings/{lead_id}")

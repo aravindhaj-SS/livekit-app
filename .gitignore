@@ -4,6 +4,7 @@ __pycache__/
 .env
 credentials.json
 leads.db
+runtime_model_config.json
 logs/
 .claude/
 recordings/

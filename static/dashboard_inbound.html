@@ -3,103 +3,36 @@
 <head>
 <meta charset="utf-8">
 <title>Mira — Inbound Calls</title>
-<style>
-  * { box-sizing: border-box; }
-  body { font-family: -apple-system, Segoe UI, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; }
-  header { padding: 1rem 1.5rem; border-bottom: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center; }
-  header h1 { font-size: 1.1rem; margin: 0; font-weight: 600; }
-  nav { display: flex; align-items: center; gap: 1.25rem; }
-  nav a { color: #94a3b8; text-decoration: none; font-size: 0.85rem; padding: 0.35rem 0.7rem; border-radius: 6px; }
-  nav a.active { color: #e2e8f0; background: #1e293b; }
-  nav a:hover:not(.active) { color: #cbd5e1; }
-
-  #wrap { padding: 1.25rem 1.5rem; max-width: 1100px; margin: 0 auto; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-  th, td { padding: 0.75rem 0.9rem; text-align: left; }
-  th { color: #64748b; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; border-bottom: 1px solid #1e293b; }
-  tbody tr { border-bottom: 1px solid #1a2436; cursor: pointer; transition: background 0.1s; }
-  tbody tr:hover { background: #172033; }
-  td.name { font-weight: 600; color: #f1f5f9; }
-  td.muted { color: #64748b; }
-
-  .tag { padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; display: inline-block; }
-  .Hot { background: #7f1d1d; color: #fecaca; }
-  .Warm { background: #78350f; color: #fed7aa; }
-  .Cold { background: #1e3a8a; color: #bfdbfe; }
-
-  .badge { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; }
-  .badge.yes { color: #86efac; }
-  .badge.no { color: #475569; }
-  .badge a { color: #93c5fd; text-decoration: none; }
-  .badge a:hover { text-decoration: underline; }
-
-  .empty { text-align: center; color: #64748b; padding: 3rem 0; }
-
-  /* ── Slide-in detail panel ─────────────────────────────────────────── */
-  #overlay { position: fixed; inset: 0; background: rgba(2,6,23,0.55); opacity: 0; pointer-events: none;
-             transition: opacity 0.2s; z-index: 10; }
-  #overlay.open { opacity: 1; pointer-events: auto; }
-
-  #detail { position: fixed; top: 0; right: -480px; width: 480px; max-width: 92vw; height: 100vh;
-            background: #111a2e; border-left: 1px solid #1e293b; transition: right 0.25s ease;
-            overflow-y: auto; z-index: 11; }
-  #detail.open { right: 0; }
-
-  #detail .dhead { position: sticky; top: 0; background: #111a2e; padding: 1.25rem 1.5rem 1rem;
-                   border-bottom: 1px solid #1e293b; z-index: 1; }
-  #detail .dclose { position: absolute; top: 1rem; right: 1.25rem; cursor: pointer; color: #64748b;
-                     font-size: 1.3rem; line-height: 1; background: none; border: none; padding: 0.25rem; }
-  #detail .dclose:hover { color: #e2e8f0; }
-  #detail .dname { font-size: 1.15rem; font-weight: 700; color: #f8fafc; margin: 0 0 0.2rem; padding-right: 2rem; }
-  #detail .dsub { color: #94a3b8; font-size: 0.85rem; }
-
-  #detail .section { padding: 1.1rem 1.5rem; border-bottom: 1px solid #1a2436; }
-  #detail .section h3 { margin: 0 0 0.7rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em;
-                         color: #64748b; font-weight: 700; }
-  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 0.4rem 0.75rem; font-size: 0.87rem; }
-  .kv dt { color: #64748b; }
-  .kv dd { margin: 0; color: #e2e8f0; }
-
-  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
-  .tile { background: #172033; border: 1px solid #1e293b; border-radius: 8px; padding: 0.6rem 0.8rem; }
-  .tile .tlabel { color: #64748b; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.03em; }
-  .tile .tval { color: #f1f5f9; font-size: 1.05rem; font-weight: 700; margin-top: 0.15rem; }
-  .tile .tsub { color: #64748b; font-size: 0.72rem; margin-top: 0.1rem; }
-
-  .priced-against { color: #64748b; font-size: 0.78rem; margin: -0.3rem 0 0.8rem; }
-  .priced-against code { color: #93c5fd; background: #0f172a; padding: 0.05rem 0.35rem; border-radius: 4px; }
-  table.utable { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 0.7rem; }
-  table.utable th { color: #64748b; font-weight: 600; text-align: right; font-size: 0.68rem;
-                    text-transform: uppercase; padding: 0.3rem 0.4rem; border-bottom: 1px solid #1e293b; }
-  table.utable th:first-child { text-align: left; }
-  table.utable td { padding: 0.35rem 0.4rem; text-align: right; border-bottom: 1px solid #16202f; color: #e2e8f0; }
-  table.utable td:first-child { text-align: left; color: #94a3b8; }
-  table.utable tr.total td { font-weight: 700; color: #f8fafc; border-top: 1px solid #1e293b; border-bottom: none; }
-
-  audio { width: 100%; height: 34px; }
-  .no-recording { color: #475569; font-size: 0.85rem; font-style: italic; }
-
-  .transcript { display: flex; flex-direction: column; gap: 0.5rem; }
-  .msg { padding: 0.5rem 0.75rem; border-radius: 8px; font-size: 0.85rem; line-height: 1.4; max-width: 92%; }
-  .msg.user { background: #172033; align-self: flex-start; }
-  .msg.assistant { background: #2a2564; align-self: flex-end; }
-  .msg .role { display: block; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.04em;
-               color: #64748b; margin-bottom: 0.2rem; }
-</style>
+<link rel="stylesheet" href="/static/dashboard.css?v=2">
 </head>
 <body>
-<header>
-  <h1>Mira — Calls</h1>
-  <nav>
+<header class="top">
+  <div class="brand">
+    <span class="mark">M</span>
+    <div>
+      <h1>Mira — Calls</h1>
+      <div class="tagline">Swaran Soft voice agent</div>
+    </div>
+  </div>
+  <nav class="top">
+    <button class="models-btn" id="models-btn" onclick="openModelModal()" title="Switch the realtime model for inbound calls">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
+      <span id="model-badge">Loading model…</span>
+    </button>
     <a href="/dashboard">Outbound</a>
     <a href="/dashboard/inbound" class="active">Inbound</a>
-    <a href="/logout">Log out</a>
+    <a href="/logout" class="logout">Log out</a>
   </nav>
 </header>
 <div id="wrap">
-  <table>
+  <div class="kpi-row" id="kpis"></div>
+  <div id="trend"></div>
+
+  <table class="calls">
     <thead>
-      <tr><th>Name</th><th>Budget</th><th>Timeline</th><th>Decision Maker</th><th>Meeting</th></tr>
+      <tr>
+        <th>Name</th><th>Budget</th><th>Timeline</th><th>Decision Maker</th><th>Meeting</th>
+      </tr>
     </thead>
     <tbody id="rows"></tbody>
   </table>
@@ -109,13 +42,18 @@
 <div id="overlay" onclick="closeDetail()"></div>
 <div id="detail">
   <div class="dhead">
-    <button class="dclose" onclick="closeDetail()" aria-label="Close">&times;</button>
+    <button class="dclose" onclick="closeDetail()" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    <div id="d-avatar-wrap"></div>
     <p class="dname" id="d-name"></p>
     <p class="dsub" id="d-sub"></p>
   </div>
   <div id="d-body"></div>
 </div>
 
+<div id="model-overlay" class="modal-overlay" onclick="closeModelModal(event)"></div>
+<div id="model-modal" class="modal"></div>
+
+<script src="/static/dashboard-common.js?v=3"></script>
 <script>
 let calls = [];
 
@@ -123,11 +61,20 @@ async function load() {
   const res = await fetch('/api/calls?direction=inbound');
   if (res.status === 401) { window.location = '/login'; return; }
   calls = await res.json();
+
+  const unidentified = calls.filter(c => !c.name).length;
+  document.getElementById('kpis').innerHTML = renderKpiRow(calls, [
+    { icon: 'userCheck', accent: 'var(--warm)', label: 'Unidentified callers', val: unidentified.toLocaleString(), sub: 'name not captured' },
+  ]);
+  document.getElementById('trend').innerHTML = renderTrendCard(calls, 'Inbound call volume');
+
   const rows = document.getElementById('rows');
   document.getElementById('empty').style.display = calls.length ? 'none' : 'block';
+  document.getElementById('empty').innerHTML = calls.length ? '' : `${ICON.inbox}<div>No inbound calls yet.</div>`;
+
   rows.innerHTML = calls.map((c, i) => `
     <tr onclick="openDetail(${i})">
-      <td class="name">${esc(c.name) || '<span class="muted">Unknown caller</span>'}</td>
+      <td class="name-cell">${avatar(c.name, c.classification)}${esc(c.name) || '<span class="muted">Unknown caller</span>'}</td>
       <td>${esc(c.budget) || '<span class="muted">—</span>'}</td>
       <td>${esc(c.timeline) || '<span class="muted">—</span>'}</td>
       <td>${esc(c.decision_maker_status) || '<span class="muted">—</span>'}</td>
@@ -136,25 +83,9 @@ async function load() {
   `).join('');
 }
 
-function meetingBadge(c) {
-  if (c.discovery_call_scheduled && c.meeting_link) {
-    return `<span class="badge yes">✓ <a href="${c.meeting_link}" target="_blank" onclick="event.stopPropagation()">link</a></span>`;
-  }
-  if (c.discovery_call_scheduled) return `<span class="badge yes">✓ booked</span>`;
-  return `<span class="badge no">—</span>`;
-}
-
-function esc(v) {
-  if (v === null || v === undefined || v === '') return '';
-  return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-function fmt(v, fallback) {
-  return (v === null || v === undefined || v === '') ? (fallback ?? '<span class="muted">Not captured yet</span>') : esc(v);
-}
-
 function openDetail(i) {
   const c = calls[i];
+  document.getElementById('d-avatar-wrap').innerHTML = avatar(c.name, c.classification).replace('class="avatar"', 'class="avatar davatar"');
   document.getElementById('d-name').textContent = c.name || 'Unknown caller';
   document.getElementById('d-sub').textContent = [c.phone_number, c.classification].filter(Boolean).join(' · ');
 
@@ -162,6 +93,8 @@ function openDetail(i) {
   const exotelCost = c.exotel_cost_inr != null ? '₹' + Number(c.exotel_cost_inr).toFixed(2) : '—';
   const totalCostV = c.total_cost_inr != null ? '₹' + Number(c.total_cost_inr).toFixed(2) : '—';
   const latency = c.avg_latency_s != null ? Number(c.avg_latency_s).toFixed(2) + 's' : '—';
+  const duration = durationLabel(c.lead_state?.call_metrics?.call_duration_s);
+  const turns = (c.transcript || []).length;
 
   const priced = c.engine
     ? `<p class="priced-against">Priced against <code>${esc(c.engine)}</code> / <code>${esc(c.model || '—')}</code></p>`
@@ -181,8 +114,8 @@ function openDetail(i) {
   const totalOutput = n(u.text_output) + n(u.audio_output);
   const tokenUsageHtml = c.usage ? `
     <div class="tiles">
-      <div class="tile"><div class="tlabel">Total input tokens</div><div class="tval">${totalInput.toLocaleString()}</div></div>
-      <div class="tile"><div class="tlabel">Total output tokens</div><div class="tval">${totalOutput.toLocaleString()}</div></div>
+      <div class="tile">${icon('cpu', 'ticon')}<div class="tlabel">Total input tokens</div><div class="tval">${totalInput.toLocaleString()}</div></div>
+      <div class="tile">${icon('cpu', 'ticon')}<div class="tlabel">Total output tokens</div><div class="tval">${totalOutput.toLocaleString()}</div></div>
     </div>
     <table class="utable">
       <thead><tr><th>Breakdown</th><th>Total</th><th>Cached</th></tr></thead>
@@ -198,14 +131,24 @@ function openDetail(i) {
 
   document.getElementById('d-body').innerHTML = `
     <div class="section">
-      <h3>Caller</h3>
-      <dl class="kv">
-        <dt>Interest area</dt><dd>${fmt(c.interest_area)}</dd>
-        <dt>Email</dt><dd>${fmt(c.email_id)}</dd>
+      <h3>${icon('phoneIn')}Call overview</h3>
+      <div class="tiles">
+        <div class="tile" style="--tile-accent: var(--cold)">${icon('clock', 'ticon')}<div class="tlabel">Duration</div><div class="tval">${duration}</div></div>
+        <div class="tile" style="--tile-accent: var(--good)">${icon('chat', 'ticon')}<div class="tlabel">Turns</div><div class="tval">${turns}</div></div>
+      </div>
+      <dl class="kv" style="margin-top:0.7rem">
+        <dt>${icon('globe')}Language</dt><dd>${fmt(c.preferred_language)}</dd>
       </dl>
     </div>
     <div class="section">
-      <h3>Qualification</h3>
+      <h3>${icon('building')}Caller</h3>
+      <dl class="kv">
+        <dt>Interest area</dt><dd>${fmt(c.interest_area)}</dd>
+        <dt>${icon('mail')}Email</dt><dd>${fmt(c.email_id)}</dd>
+      </dl>
+    </div>
+    <div class="section">
+      <h3>${icon('userCheck')}Qualification</h3>
       <dl class="kv">
         <dt>Budget</dt><dd>${fmt(c.budget)}</dd>
         <dt>Timeline</dt><dd>${fmt(c.timeline)}</dd>
@@ -214,11 +157,11 @@ function openDetail(i) {
     </div>
     ${c.callback_time ? `
     <div class="section">
-      <h3>Callback requested</h3>
+      <h3>${icon('phoneCallback')}Callback requested</h3>
       <dl class="kv"><dt>Time</dt><dd>${esc(c.callback_time)}</dd></dl>
     </div>` : ''}
     <div class="section">
-      <h3>Cost &amp; latency</h3>
+      <h3>${icon('rupee')}Cost &amp; latency</h3>
       ${priced}
       <div class="tiles">
         <div class="tile"><div class="tlabel">AI cost</div><div class="tval">${aiCost}</div><div class="tsub">Gemini / OpenAI tokens</div></div>
@@ -228,15 +171,15 @@ function openDetail(i) {
       </div>
     </div>
     <div class="section">
-      <h3>Token usage</h3>
+      <h3>${icon('cpu')}Token usage</h3>
       ${tokenUsageHtml}
     </div>
     <div class="section">
-      <h3>Recording</h3>
+      <h3>${icon('mic')}Recording</h3>
       ${recordingHtml}
     </div>
     <div class="section">
-      <h3>Transcript</h3>
+      <h3>${icon('chat')}Transcript</h3>
       ${transcriptHtml}
     </div>
   `;
@@ -254,6 +197,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetai
 
 load();
 setInterval(load, 15000);
+initModelPicker('inbound');
 </script>
 </body>
 </html>

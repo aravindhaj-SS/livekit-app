@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from api.routes import router as api_router
 from core.config import settings
 from core.dashboard_auth import dash_token, dash_token_valid
-from core.database import init_db
+from core.database import close_db, init_db
 from core.rag import aclose as rag_aclose
 from voice.gemini_bridge import router as ws_router
 
@@ -30,10 +30,25 @@ async def lifespan(app: FastAPI):
     await init_db()
     yield
     await rag_aclose()
+    await close_db()
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """Plain StaticFiles sends no Cache-Control header at all, so browsers
+    fall back to heuristic caching and can keep serving stale dashboard.css/
+    dashboard-common.js for a long time after a deploy — with no visible sign
+    anything is wrong, since the page still loads fine, just with old assets.
+    no-cache forces revalidation (If-None-Match) on every load; ETag support
+    means an unchanged file still comes back as a cheap 304, not a re-download."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 app = FastAPI(lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", NoCacheStaticFiles(directory="static"), name="static")
 app.include_router(api_router, prefix="/api")
 app.include_router(ws_router)
 

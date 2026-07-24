@@ -19,6 +19,9 @@ class Settings(BaseSettings):
 
     BASE_URL: str = "http://localhost:8000"
 
+    # ── Postgres (lead/call storage — replaces the old leads.db SQLite file) ──
+    DATABASE_URL: str = "postgresql://livekit_app:changeme@localhost:5432/livekit_leads"
+
     # ── Gemini Live — kept configured but no longer used live (see below) ─────
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash-native-audio-preview-12-2025"
@@ -27,12 +30,15 @@ class Settings(BaseSettings):
     # Switched from Gemini Live: real test calls showed 30-50s silent stalls
     # around tool calls, matching a documented, currently-open issue with
     # Gemini's native-audio model's function-calling latency (LiveKit
-    # agents#4554; Google's own dev forum). gpt-realtime-2.1 specifically
-    # targets that failure mode — a spoken preamble the moment it decides to
-    # call a tool, plus asynchronous function calling so a slow tool call no
-    # longer freezes the session.
+    # agents#4554; Google's own dev forum).
+    #
+    # Standardized on plain "gpt-realtime" (not "-2.1") for both directions —
+    # a deliberate operational decision, not a placeholder. This is the
+    # fallback default only (used if runtime_model_config.json is ever
+    # missing, e.g. a fresh deploy); the live per-direction selection lives
+    # in that file and is what actually governs real calls.
     OPEN_AI_API_KEY: str = ""
-    OPENAI_REALTIME_MODEL: str = "gpt-realtime-2.1"
+    OPENAI_REALTIME_MODEL: str = "gpt-realtime"
 
     # Diagnostic-only toggle: "openai" (default, production) or "gemini" — a
     # one-off comparison test against Gemini Live's native-audio model, using
