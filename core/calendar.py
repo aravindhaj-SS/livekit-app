@@ -15,11 +15,15 @@ async def book_discovery_call(
     organizer_email: str,
     preferred_slot: Optional[str],
     additional_emails: Optional[Sequence[str]] = None,
-) -> Optional[str]:
+) -> Optional[tuple[str, str]]:
     """
     Creates a Google Calendar event with a Meet link using the saved OAuth
     token (run scripts/auth_setup.py once to create token.pkl).
-    Returns the Meet link on success, None on failure or misconfiguration.
+    Returns (meet_link, event_id) on success — event_id is stored on the lead
+    row (core/database.save_meeting_link) so a returning caller can later
+    reschedule this exact event via reschedule_discovery_call() below instead
+    of a fresh call always creating a duplicate booking. Returns None on
+    failure or misconfiguration.
     """
     extra = [e for e in (additional_emails or []) if e]
     logger.info(
@@ -108,7 +112,7 @@ async def book_discovery_call(
                 "Event created but hangoutLink is empty — conferenceDataVersion=1 may "
                 "have failed; check the event in Google Calendar."
             )
-        return meet_link
+        return meet_link, event_id
 
     except ImportError:
         logger.error(
@@ -120,6 +124,90 @@ async def book_discovery_call(
         body = getattr(e, "content", None) or getattr(e, "resp", None)
         logger.error(
             f"Calendar booking failed — type={type(e).__name__} msg={e!r} extra={body!r}",
+            exc_info=True,
+        )
+        return None
+
+
+async def reschedule_discovery_call(
+    event_id: str,
+    organizer_email: str,
+    preferred_slot: Optional[str],
+) -> Optional[tuple[str, str]]:
+    """
+    Moves an EXISTING discovery-call event to a new time via .events().patch()
+    (start/end only — attendees, the Meet link/conferenceData, and everything
+    else about the event are left untouched). Used when a returning caller
+    asks to move a meeting already booked from a prior call (see
+    voice/gemini_bridge.py's _end — the reschedule-vs-create decision is made
+    purely on whether the previous call's row has a calendar_event_id).
+
+    Returns (meet_link, event_id) on success, same shape as book_discovery_call
+    so both share one call site. Returns None on failure (including the
+    original event having been deleted/not found) — the caller falls back to
+    book_discovery_call to create a fresh booking rather than leaving the
+    lead with nothing.
+    """
+    logger.info(f"reschedule_discovery_call invoked — event_id={event_id} slot='{preferred_slot}'")
+    if not event_id:
+        logger.warning("No event_id — cannot reschedule, caller should fall back to booking fresh")
+        return None
+    if not _TOKEN_PATH.exists():
+        logger.warning(
+            "token.pkl not found — run scripts/auth_setup.py once to authorise "
+            "Google Calendar access"
+        )
+        return None
+
+    try:
+        from google.auth.transport.requests import Request
+        from googleapiclient.discovery import build
+
+        with open(_TOKEN_PATH, "rb") as f:
+            creds = pickle.load(f)
+
+        if creds.expired and creds.refresh_token:
+            logger.info("OAuth creds expired — refreshing")
+            creds.refresh(Request())
+            with open(_TOKEN_PATH, "wb") as f:
+                pickle.dump(creds, f)
+            logger.info("OAuth creds refreshed and persisted")
+
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+
+        start_dt = _parse_slot(preferred_slot)
+        end_dt = start_dt + timedelta(hours=1)
+        logger.info(f"Reschedule window resolved — start={start_dt.isoformat()} end={end_dt.isoformat()}")
+
+        updated = (
+            service.events()
+            .patch(
+                calendarId="primary",
+                eventId=event_id,
+                body={
+                    "start": {"dateTime": start_dt.isoformat(), "timeZone": "Asia/Kolkata"},
+                    "end": {"dateTime": end_dt.isoformat(), "timeZone": "Asia/Kolkata"},
+                },
+                sendUpdates="all",
+            )
+            .execute()
+        )
+
+        meet_link = updated.get("hangoutLink", "")
+        logger.info(f"Discovery call rescheduled — event_id={event_id} new_meet_link={meet_link}")
+        return meet_link, event_id
+
+    except ImportError:
+        logger.error(
+            "google-api-python-client not installed — run: "
+            "pip install google-api-python-client google-auth google-auth-httplib2"
+        )
+        return None
+    except Exception as e:
+        body = getattr(e, "content", None) or getattr(e, "resp", None)
+        logger.error(
+            f"Calendar reschedule failed — event_id={event_id} type={type(e).__name__} "
+            f"msg={e!r} extra={body!r}",
             exc_info=True,
         )
         return None

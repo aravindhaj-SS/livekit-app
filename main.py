@@ -12,6 +12,7 @@ from core.dashboard_auth import dash_token, dash_token_valid
 from core.database import close_db, init_db
 from core.rag import aclose as rag_aclose
 from voice.gemini_bridge import router as ws_router
+from voice.warm_pool import start_inbound_warm_pool, stop_inbound_warm_pool
 
 os.makedirs("logs", exist_ok=True)
 logging.basicConfig(
@@ -28,7 +29,9 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    start_inbound_warm_pool()
     yield
+    await stop_inbound_warm_pool()
     await rag_aclose()
     await close_db()
 

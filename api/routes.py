@@ -145,6 +145,13 @@ async def list_calls(direction: Optional[str] = None, dash_auth: Optional[str] =
             "timeline": lead.get("timeline"),
             "decision_maker_status": lead.get("decision_maker_status"),
             "callback_time": lead.get("callback_time"),
+            # Returning-caller support (see core/database.get_previous_calls,
+            # voice/gemini_bridge.py's _apply_returning_caller_context) — a
+            # one-line post-call summary, surfaced here mainly so this can be
+            # eyeballed/verified against what the agent actually says on that
+            # lead's next call.
+            "call_summary": lead.get("call_summary"),
+            "calendar_event_id": lead.get("calendar_event_id"),
             # AI-model token cost (USD) — see core/costs.py.
             "cost_usd": lead.get("cost_usd"),
             # Exotel telephony leg (INR, per-minute rate x whole minutes).

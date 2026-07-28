@@ -572,3 +572,62 @@ async def classify_in_scope_form(interest_area: str) -> tuple[bool, str]:
     except Exception as e:
         logger.warning(f"Pre-call classifier failed for interest={text!r} ({e!r}); failing open")
         return True, f"classifier unavailable ({type(e).__name__})"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Post-call summarizer — returning-caller support (voice/gemini_bridge.py's
+# _end()). Runs once, after the call/WS is already closed, same reasoning as
+# book_discovery_call running after close: a real network round trip that
+# must never delay hanging up on the caller. Fails open (returns None) so a
+# summarization hiccup never blocks the rest of call-end persistence.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CALL_SUMMARY_SYSTEM_PROMPT = """Summarize this sales/support call transcript in ONE short sentence (max ~30 words), written for a teammate picking up the SAME caller's next call. Focus on: what they were interested in, key facts learned (budget/timeline/decision-maker if mentioned), and the outcome (booked a call, asked for callback, still deciding, etc). Plain factual language, no fluff, third person ("They..."/"Caller...").
+
+Output JSON exactly: {"summary": "<one sentence>"}"""
+
+_CALL_SUMMARY_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {"summary": {"type": "string"}},
+    "required": ["summary"],
+}
+
+# Bounds the transcript sent to the summarizer — this is a one-line summary,
+# not a transcription task, and a very long call doesn't need the whole
+# thing to produce one.
+_SUMMARY_TRANSCRIPT_CHAR_LIMIT = 8000
+
+
+async def summarize_call(transcript: list[dict]) -> Optional[str]:
+    """One-line, cheap-LLM post-call summary — grounds a returning caller's
+    next conversation ("last time we spoke about...") in real content
+    instead of just the structured budget/timeline/decision_maker_status
+    columns already captured elsewhere."""
+    convo = "\n".join(
+        f"{t['role']}: {t['content']}" for t in transcript if t.get("content")
+    ).strip()
+    if not convo:
+        return None
+    try:
+        from google import genai as google_genai
+
+        client = google_genai.Client(api_key=settings.GEMINI_API_KEY)
+        resp = await client.aio.models.generate_content(
+            model="gemini-flash-latest",
+            contents=convo[-_SUMMARY_TRANSCRIPT_CHAR_LIMIT:],
+            config={
+                "system_instruction": _CALL_SUMMARY_SYSTEM_PROMPT,
+                "temperature": 0.0,
+                "response_mime_type": "application/json",
+                "response_schema": _CALL_SUMMARY_RESPONSE_SCHEMA,
+                "thinking_config": {"thinking_budget": 0},
+            },
+        )
+        raw = resp.text or ""
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        data = json.loads(match.group(0) if match else raw)
+        summary = (data.get("summary") or "").strip()
+        return summary or None
+    except Exception as e:
+        logger.warning(f"summarize_call failed ({e!r}); leaving call_summary unset")
+        return None

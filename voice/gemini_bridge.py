@@ -52,12 +52,20 @@ from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 from agent import lead_agent as la
 from agent.lead_state import LeadState
 from agent.prompt import build_instructions
-from core.calendar import book_discovery_call
+from core.calendar import book_discovery_call, reschedule_discovery_call
 from core.config import settings
 from core.costs import compute_call_cost
-from core.database import create_inbound_lead, get_lead, save_meeting_link, update_lead_state
+from core.database import (
+    create_inbound_lead,
+    get_lead,
+    get_previous_calls,
+    save_meeting_link,
+    update_call_summary,
+    update_lead_state,
+)
 from core.model_config import get_engine_and_model, get_model_settings
 from core.pending_calls import consume as consume_pending_call
+from core.pending_calls import normalize_phone
 from core.rag import ask as rag_ask
 
 logger = logging.getLogger(__name__)
@@ -375,6 +383,75 @@ def _generate_reply_supported(engine: str, model: str | None) -> bool:
     if engine != "gemini":
         return True
     return "3.1" not in (model or "")
+
+
+def _build_openai_realtime_model(model_name: str, model_settings: dict) -> RealtimeModel:
+    """Builds the OpenAI RealtimeModel for a given (model, settings) pair.
+    Pulled out as its own function — rather than left inline in
+    CallSession._start_agent_session — specifically so voice/warm_pool.py's
+    pre-warmed inbound sessions are built from the EXACT same construction
+    logic as a normal cold-started call, not a hand-copied approximation
+    that could quietly drift out of sync with this one over time."""
+    # reasoning_effort is only set in the catalog for models confirmed
+    # reasoning-capable (gpt-realtime-2.1 and its mini variant) — omitted
+    # entirely, not just set to a default, for models where it's
+    # unconfirmed (gpt-realtime) or predates the feature outright
+    # (gpt-4o-realtime-preview), since passing an unsupported request param
+    # is a real setup-time risk, not just a wasted no-op.
+    #
+    # turn_detection: the plugin's own default (unset) is
+    # semantic_vad/eagerness=medium, which waits to be semantically sure
+    # the caller is done talking before it even starts generating — real
+    # extra latency on top of the reasoning cost above. A fixed, short
+    # silence window responds far faster and is what we actually want for
+    # a phone call.
+    turn_detection_settings = model_settings.get("turn_detection") or {}
+    openai_kwargs = dict(
+        api_key=settings.OPEN_AI_API_KEY,
+        model=model_name,
+        voice=model_settings.get("voice", "marin"),
+        speed=model_settings.get("speed", 1.0),
+        turn_detection=ServerVad(
+            type="server_vad",
+            silence_duration_ms=turn_detection_settings.get("silence_duration_ms", 350),
+            prefix_padding_ms=turn_detection_settings.get("prefix_padding_ms", 300),
+            # Audio-activity sensitivity (0.0-1.0, OpenAI's own default
+            # ~0.5) — raised via the catalog to cut down on background
+            # noise/line static being misread as speech starting. This is
+            # a real field on ServerVad that was never set before
+            # (confirmed via the installed SDK's own type —
+            # openai.types.realtime.ServerVad.threshold).
+            threshold=turn_detection_settings.get("threshold"),
+            create_response=True,
+            interrupt_response=True,
+        ),
+        # OpenAI's equivalent of Gemini's context_window_compression —
+        # verified directly against the live Realtime API (a raw
+        # session.update with this field) that it's accepted cleanly. Less
+        # urgent here than for Gemini (OpenAI already caches 86-93% of
+        # repeated context per this app's own measured per-call usage, vs
+        # 0% for Gemini), but the SDK's own docs note "auto" truncation
+        # still "helps improve cached token usage" by amortizing
+        # truncations across turns instead of leaving the behavior on an
+        # unstated default.
+        truncation="auto",
+        # Filters input audio before it ever reaches VAD/transcription —
+        # never configured before. OpenAI's own docs describe this as
+        # improving "VAD and turn detection accuracy (reducing false
+        # positives)": directly targets background noise/line static
+        # being misheard as speech and transcribed as (sometimes garbled,
+        # sometimes wrong-language) caller input — confirmed happening in
+        # production (2026-07-24, lead 99: transcript opened with a
+        # hallucinated "Thanks a lot." from the caller, followed by
+        # non-speech garbage transcribed as other languages). "far_field"
+        # fits phone-line audio better than "near_field" (built for
+        # close-talking headset mics).
+        input_audio_noise_reduction=model_settings.get("noise_reduction"),
+    )
+    reasoning_effort = model_settings.get("reasoning_effort")
+    if reasoning_effort:
+        openai_kwargs["reasoning"] = RealtimeReasoning(effort=reasoning_effort)
+    return RealtimeModel(**openai_kwargs)
 
 
 class ExotelAudioInput(agent_io.AudioInput):
@@ -757,10 +834,81 @@ class CallSession:
             f"phone={caller_number!r}"
         )
 
-        await self._start_agent_session()
+        await self._apply_returning_caller_context(caller_number or self.state.phone_number)
+
+        # Inbound only (see voice/warm_pool.py — outbound instructions embed
+        # the specific lead's name/company/interest, so a generic pre-warmed
+        # session can't be reused for it). Falls straight through to the
+        # normal cold-start path below if the pool has nothing ready.
+        used_warm = self.state.direction == "inbound" and await self._try_use_warm_inbound_session()
+        if not used_warm:
+            await self._start_agent_session()
 
         self._watchdog_task = asyncio.create_task(self._watchdog_loop())
         self._last_activity_at = time.monotonic()
+
+    async def _apply_returning_caller_context(self, phone_for_lookup: str) -> None:
+        """Looks up prior COMPLETED calls from this same phone number (see
+        core/database.get_previous_calls) and, if found, marks self.state as
+        a returning caller and backfills whatever identity fields this call
+        doesn't already have (matters most for inbound, which otherwise
+        starts every field blank). Must run BEFORE build_instructions() is
+        used anywhere for this call — both the cold-start path
+        (_start_agent_session, via MiraAgent.__init__) and the warm-pool path
+        (_try_use_warm_inbound_session's update_instructions call) read
+        self.state.is_returning_caller/previous_call.
+
+        Never raises: a lookup failure just means this call proceeds as if
+        it were a first-time caller — never something that can take a live
+        call down."""
+        try:
+            normalized = normalize_phone(phone_for_lookup) if phone_for_lookup else ""
+            if not normalized:
+                return
+            previous = await get_previous_calls(normalized, exclude_lead_id=self.state.lead_id, limit=1)
+            if not previous:
+                return
+
+            prev = previous[0]
+            self.state.is_returning_caller = True
+            self.state.previous_call = {
+                "name": prev.get("name"),
+                "company": prev.get("company"),
+                "interest_area": prev.get("interest_area"),
+                "budget": prev.get("budget"),
+                "timeline": prev.get("timeline"),
+                "decision_maker_status": prev.get("decision_maker_status"),
+                "email_id": prev.get("email_id"),
+                "discovery_call_scheduled": bool(prev.get("discovery_call_scheduled")),
+                "meeting_link": prev.get("meeting_link"),
+                "calendar_event_id": prev.get("calendar_event_id"),
+                "callback_time": prev.get("callback_time"),
+                "summary": prev.get("call_summary"),
+            }
+
+            # Backfill onto THIS call's own state too — not just the
+            # RETURNING CALLER prompt block below reads these, save_lead_info
+            # and the existing email_step logic in agent/prompt.py both
+            # already work off state.name/company/email_id directly, so
+            # filling them in here means no other code needs to know about
+            # previous_call at all. Never overwrites a value this call's own
+            # source (form submission / save_lead_info) already set.
+            if not self.state.name and prev.get("name"):
+                self.state.name = prev["name"]
+            if not self.state.company and prev.get("company"):
+                self.state.company = prev["company"]
+            if not self.state.interest_area and prev.get("interest_area"):
+                self.state.interest_area = prev["interest_area"]
+            if not self.state.email_id and prev.get("email_id"):
+                self.state.email_id = prev["email_id"]
+                self.state.email_confirmed = True
+
+            logger.info(
+                f"Returning caller detected — lead_id={self.state.lead_id} "
+                f"previous_lead_id={prev.get('id')} name={self.state.name!r}"
+            )
+        except Exception:
+            logger.exception("_apply_returning_caller_context failed — proceeding as a first-time caller")
 
     async def _start_agent_session(self, recovery_line: Optional[str] = None):
         """(Re)creates the Gemini Live session. Reuses the SAME LeadState so
@@ -838,90 +986,111 @@ class CallSession:
                 context_window_compression=compression,
             )
         else:
-            # reasoning_effort is only set in the catalog for models
-            # confirmed reasoning-capable (gpt-realtime-2.1 and its mini
-            # variant) — omitted entirely, not just set to a default, for
-            # models where it's unconfirmed (gpt-realtime) or predates the
-            # feature outright (gpt-4o-realtime-preview), since passing an
-            # unsupported request param is a real setup-time risk, not just
-            # a wasted no-op.
-            #
-            # turn_detection: the plugin's own default (unset) is
-            # semantic_vad/eagerness=medium, which waits to be semantically
-            # sure the caller is done talking before it even starts
-            # generating — real extra latency on top of the reasoning cost
-            # above. A fixed, short silence window responds far faster and
-            # is what we actually want for a phone call.
-            turn_detection_settings = model_settings.get("turn_detection") or {}
-            openai_kwargs = dict(
-                api_key=settings.OPEN_AI_API_KEY,
-                model=model_name,
-                voice=model_settings.get("voice", "marin"),
-                speed=model_settings.get("speed", 1.0),
-                turn_detection=ServerVad(
-                    type="server_vad",
-                    silence_duration_ms=turn_detection_settings.get("silence_duration_ms", 350),
-                    prefix_padding_ms=turn_detection_settings.get("prefix_padding_ms", 300),
-                    # Audio-activity sensitivity (0.0-1.0, OpenAI's own
-                    # default ~0.5) — raised via the catalog to cut down on
-                    # background noise/line static being misread as speech
-                    # starting. This is a real field on ServerVad that was
-                    # never set before (confirmed via the installed SDK's
-                    # own type — openai.types.realtime.ServerVad.threshold).
-                    threshold=turn_detection_settings.get("threshold"),
-                    create_response=True,
-                    interrupt_response=True,
-                ),
-                # OpenAI's equivalent of Gemini's context_window_compression —
-                # verified directly against the live Realtime API (a raw
-                # session.update with this field) that it's accepted cleanly.
-                # Less urgent here than for Gemini (OpenAI already caches
-                # 86-93% of repeated context per this app's own measured
-                # per-call usage, vs 0% for Gemini), but the SDK's own docs
-                # note "auto" truncation still "helps improve cached token
-                # usage" by amortizing truncations across turns instead of
-                # leaving the behavior on an unstated default.
-                truncation="auto",
-                # Filters input audio before it ever reaches VAD/transcription
-                # — never configured before. OpenAI's own docs describe this
-                # as improving "VAD and turn detection accuracy (reducing
-                # false positives)": directly targets background noise/line
-                # static being misheard as speech and transcribed as
-                # (sometimes garbled, sometimes wrong-language) caller input
-                # — confirmed happening in production (2026-07-24, lead 99:
-                # transcript opened with a hallucinated "Thanks a lot." from
-                # the caller, followed by non-speech garbage transcribed as
-                # other languages). "far_field" fits phone-line audio better
-                # than "near_field" (built for close-talking headset mics).
-                input_audio_noise_reduction=model_settings.get("noise_reduction"),
-            )
-            reasoning_effort = model_settings.get("reasoning_effort")
-            if reasoning_effort:
-                openai_kwargs["reasoning"] = RealtimeReasoning(effort=reasoning_effort)
-            model = RealtimeModel(**openai_kwargs)
+            model = _build_openai_realtime_model(model_name, model_settings)
         self._agent_session = AgentSession(llm=model)
 
         self._audio_input = ExotelAudioInput()
+        self._agent_session.input.audio = self._audio_input
+
+        await self._finish_agent_session_setup(started=False, recovery_line=recovery_line)
+
+    async def _finish_agent_session_setup(
+        self, *, started: bool, recovery_line: Optional[str] = None
+    ) -> None:
+        """Shared tail for both the normal (cold) construction path above and
+        the warm-handoff path (_try_use_warm_inbound_session) — output wiring,
+        event handlers, starting the session if it isn't already, and firing
+        the opening line. output.audio is safe to (re)assign here regardless
+        of path: confirmed via the installed SDK's source that it's read
+        fresh per-turn (self._session.output.audio), unlike input.audio,
+        which is captured once by _forward_audio_task at session.start()
+        time — that asymmetry is exactly why the warm pool has to reuse the
+        SAME ExotelAudioInput instance a warm session was started with
+        rather than swap in a new one, but can attach a brand new
+        ExotelAudioOutput here with no such restriction."""
         audio_output = ExotelAudioOutput(
             send_frame=self._send_frame,
             get_sid=lambda: self._sid,
             on_segment_finished=self._on_segment_finished,
             on_frame=self._record_agent_frame,
         )
-
-        self._agent_session.input.audio = self._audio_input
         self._agent_session.output.audio = audio_output
         self._agent_session.on("error", self._on_agent_session_error)
         self._agent_session.on("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.on("metrics_collected", self._on_metrics_collected)
 
-        await self._agent_session.start(self._agent)
+        if not started:
+            await self._agent_session.start(self._agent)
 
         # Literal, deterministic line — not a meta-instruction (see
         # _build_opening_line's docstring for why that used to be silent).
         opening_line = recovery_line or _build_opening_line(self.state)
         self._greeting_confirmed = False
         asyncio.create_task(self._ensure_opening_line_spoken(opening_line))
+
+    async def _try_use_warm_inbound_session(self) -> bool:
+        """Inbound-only fast path (see voice/warm_pool.py): if a pre-connected,
+        already-settled session is available, adopt it instead of building
+        fresh — skips the connect-and-settle cost that's the actual
+        bottleneck (verified: ~2.0s cold vs ~0.9s from a session given time
+        to settle first, same code path, 20+ live trials). Returns False (do
+        nothing) if the pool has nothing ready — caller falls back to the
+        normal _start_agent_session() path unchanged. Never raises: any
+        problem here just means "no warm session," not a broken call."""
+        try:
+            from voice.warm_pool import take_warm_inbound_session
+
+            warm = take_warm_inbound_session()
+            if warm is None:
+                return False
+            agent, session, audio_input, engine, model_name = warm
+
+            # The warm agent's instructions were built from a disposable
+            # placeholder LeadState — byte-identical to what a FIRST-TIME
+            # inbound caller needs (agent/prompt.py's inbound instructions
+            # only ever reference state.direction, never name/company/phone/
+            # email, for a non-returning caller — see warm_pool.py's module
+            # docstring), but the tool methods (save_lead_info/
+            # search_knowledge_base) read/write self.lead_state, so that has
+            # to point at THIS call's real, DB-backed state, not the
+            # placeholder, regardless of returning-caller status.
+            agent.lead_state = self.state
+            self._agent = agent
+            self._agent_session = session
+            self._audio_input = audio_input
+            self.state.call_metrics["engine"] = engine
+            self.state.call_metrics["model"] = model_name
+
+            # Returning-caller instructions (greet by name, prior BANT facts,
+            # booking-gate override — see agent/prompt.py's
+            # _returning_caller_block) are NOT byte-identical to the
+            # placeholder's, since _apply_returning_caller_context (run
+            # earlier in _on_start) only just resolved this from the DB.
+            # update_instructions() is a real, awaitable SDK method that
+            # works on a running OpenAI Realtime session (only Gemini-3.1
+            # hard-blocks it, and that model never reaches this warm-pool
+            # path — see core/model_config.py's standardization on
+            # gpt-realtime) — this personalizes the already-warm, already-
+            # settled connection in place, no reconnect, no new warm pool.
+            # Skipped entirely for a non-returning caller: build_instructions
+            # would just reproduce the placeholder's own text, so there's
+            # nothing to gain from the extra realtime session.update() round
+            # trip.
+            if self.state.is_returning_caller:
+                try:
+                    await agent.update_instructions(build_instructions(self.state))
+                except Exception:
+                    logger.exception(
+                        "Failed to personalize warm session instructions for returning caller — "
+                        "continuing with the generic greeting instead"
+                    )
+
+            await self._finish_agent_session_setup(started=True)
+            logger.info(f"Adopted warm inbound session for lead_id={self.state.lead_id}")
+            return True
+        except Exception:
+            logger.exception("Warm inbound handoff failed — falling back to a cold start")
+            return False
 
     def _on_agent_session_error(self, ev):
         logger.error(f"AgentSession error: {ev}")
@@ -1681,20 +1850,55 @@ class CallSession:
         except Exception:
             pass
 
+        # Post-call summarizer — a real network round trip (same reasoning
+        # as book_discovery_call below: runs after the WS/session are already
+        # closed so it never delays hanging up on the caller). Feeds
+        # agent/prompt.py's RETURNING CALLER block on this same lead's NEXT
+        # call (see _apply_returning_caller_context). Failure here is
+        # logged inside summarize_call itself and never raises.
+        if s and s.lead_id:
+            summary = await la.summarize_call(transcript)
+            if summary:
+                try:
+                    await update_call_summary(s.lead_id, summary)
+                except Exception:
+                    logger.exception(f"Failed to persist call_summary for lead {s.lead_id}")
+
         if s and s.discovery_call_agreed and s.email_id:
+            # Returning caller with an existing booking (see
+            # _apply_returning_caller_context) → move that exact event
+            # instead of creating a duplicate. Falls back to a fresh booking
+            # if the reschedule fails (e.g. the original event was deleted
+            # out-of-band) — never leaves the lead with nothing booked just
+            # because the old event is gone.
+            existing_event_id = (s.previous_call or {}).get("calendar_event_id")
             try:
-                meet_link = await book_discovery_call(
-                    lead_name=s.name,
-                    lead_email=s.email_id,
-                    organizer_email=settings.CALENDAR_ORGANIZER_EMAIL,
-                    preferred_slot=s.preferred_slot,
-                )
-                if meet_link and s.lead_id:
+                result = None
+                if existing_event_id:
+                    result = await reschedule_discovery_call(
+                        event_id=existing_event_id,
+                        organizer_email=settings.CALENDAR_ORGANIZER_EMAIL,
+                        preferred_slot=s.preferred_slot,
+                    )
+                    if not result:
+                        logger.warning(
+                            f"Reschedule failed for event_id={existing_event_id!r} — "
+                            "falling back to booking a fresh discovery call"
+                        )
+                if not result:
+                    result = await book_discovery_call(
+                        lead_name=s.name,
+                        lead_email=s.email_id,
+                        organizer_email=settings.CALENDAR_ORGANIZER_EMAIL,
+                        preferred_slot=s.preferred_slot,
+                    )
+                if result and s.lead_id:
+                    meet_link, event_id = result
                     s.meeting_link = meet_link
                     s.discovery_call_scheduled = True
-                    await save_meeting_link(s.lead_id, meet_link)
+                    await save_meeting_link(s.lead_id, meet_link, event_id)
             except Exception:
-                logger.exception("book_discovery_call failed")
+                logger.exception("book/reschedule discovery_call failed")
 
 
 @router.websocket("/media-stream")

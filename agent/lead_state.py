@@ -37,6 +37,16 @@ class LeadState:
     callback_requested: bool = False
     callback_time: Optional[str] = None
 
+    # Returning-caller support (see voice/gemini_bridge.py's _on_start,
+    # core/database.get_previous_calls). previous_call holds a plain dict of
+    # whatever the most recent prior completed call from this same phone
+    # number captured — name/company/interest_area/budget/timeline/
+    # decision_maker_status/email_id/discovery_call_scheduled/meeting_link/
+    # calendar_event_id/callback_time/summary — so agent/prompt.py can inject
+    # it without a second DB round trip mid-call. None for a first-time caller.
+    is_returning_caller: bool = False
+    previous_call: Optional[dict] = None
+
     call_metrics: dict = field(default_factory=lambda: {"call_duration_s": 0.0})
 
     def to_dict(self) -> dict:
