@@ -82,6 +82,17 @@ class Settings(BaseSettings):
     DASHBOARD_ADMIN_USERNAME: str = "admin"
     DASHBOARD_ADMIN_PASSWORD: str = "admin_123"
 
+    # ── Local model for dashboard AI insights (core/ollama_client.py) ──────────
+    # Mira's OWN dedicated Ollama instance (deploy/ollama-mira.service) — NOT
+    # the machine's shared ollama.service (port 11434), which is tuned
+    # OLLAMA_NUM_PARALLEL=1 (globally single-request) for a different,
+    # latency-critical voice system. Routing dashboard-insight traffic through
+    # that shared instance would contend for its one inference slot and could
+    # stall somebody else's live call, so this app runs its own isolated
+    # instance on a different port instead. See core/ollama_client.py.
+    OLLAMA_MIRA_HOST: str = "http://127.0.0.1:11435"
+    OLLAMA_MIRA_MODEL: str = "llama3.1:8b"
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

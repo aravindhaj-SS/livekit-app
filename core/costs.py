@@ -103,15 +103,22 @@ def compute_call_cost(
     exotel_cost_inr = compute_exotel_cost_inr(call_duration_s, direction=direction)
     minutes = call_duration_s / 60.0 if call_duration_s > 0 else 0.0
     total_cost_inr = round(ai_cost_usd * settings.USD_TO_INR + exotel_cost_inr, 4)
+    ai_cost_per_min_usd = round(ai_cost_usd / minutes, 6) if minutes > 0 else 0.0
+    exotel_cost_per_min_inr = (
+        settings.EXOTEL_COST_PER_MIN_INBOUND_INR
+        if direction == "inbound"
+        else settings.EXOTEL_COST_PER_MIN_OUTBOUND_INR
+    )
     return {
         "ai_cost_usd": ai_cost_usd,
-        "ai_cost_per_min_usd": round(ai_cost_usd / minutes, 6) if minutes > 0 else 0.0,
+        "ai_cost_per_min_usd": ai_cost_per_min_usd,
         "exotel_cost_inr": exotel_cost_inr,
-        "exotel_cost_per_min_inr": (
-            settings.EXOTEL_COST_PER_MIN_INBOUND_INR
-            if direction == "inbound"
-            else settings.EXOTEL_COST_PER_MIN_OUTBOUND_INR
-        ),
+        "exotel_cost_per_min_inr": exotel_cost_per_min_inr,
+        # Blended per-minute figure (AI + telephony, one INR number) — for the
+        # per-call detail panel and the master dashboard's per-minute-cost
+        # charts, so neither has to re-derive this from the two separate
+        # legs above (and risk drifting from this exact formula).
+        "blended_cost_per_min_inr": round(ai_cost_per_min_usd * settings.USD_TO_INR + exotel_cost_per_min_inr, 4),
         "total_cost_inr": total_cost_inr,
         "usd_to_inr_rate": settings.USD_TO_INR,
     }

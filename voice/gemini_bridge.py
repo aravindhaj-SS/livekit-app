@@ -52,6 +52,7 @@ from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 from agent import lead_agent as la
 from agent.lead_state import LeadState
 from agent.prompt import build_instructions
+from core import live_calls
 from core.calendar import book_discovery_call, reschedule_discovery_call
 from core.config import settings
 from core.costs import compute_call_cost
@@ -688,6 +689,14 @@ class MiraAgent(Agent):
             return await self._do_search_knowledge_base(query)
 
     async def _do_search_knowledge_base(self, query: str) -> str:
+        # Timed separately from the realtime model's own turn latency
+        # (avg_latency_s, from AgentSession metrics) — this is purely the RAG
+        # microservice's own round trip, feeding the master dashboard's "avg
+        # RAG latency" stat. Recorded even on failure (rag_ask itself fails
+        # open at ("", []) rather than raising), so a slow-then-empty RAG
+        # response still shows up in the average instead of silently
+        # vanishing from it.
+        t0 = time.monotonic()
         try:
             resolved_query = query
             if self.last_rag_topic and len(query.split()) <= 6:
@@ -706,6 +715,8 @@ class MiraAgent(Agent):
         except Exception:
             logger.exception("search_knowledge_base failed")
             return "No specific information found in the knowledge base for this."
+        finally:
+            self.lead_state.call_metrics.setdefault("rag_latencies", []).append(time.monotonic() - t0)
 
 
 class CallSession:
@@ -719,6 +730,11 @@ class CallSession:
         self._ended = False
         self._reconnecting = False
         self._reconnect_count = 0
+        # Guards live_calls.call_ended() in _end() — only decrement the
+        # active-call counter if _on_start actually incremented it (a WS
+        # that connects but never gets a "start" event before disconnecting
+        # must not touch the counter at all).
+        self._live_call_counted = False
 
         self._watchdog_task: Optional[asyncio.Task] = None
         self._last_activity_at = time.monotonic()
@@ -786,6 +802,8 @@ class CallSession:
     async def _on_start(self, msg: dict):
         self._recording_start_t = time.monotonic()
         self._session_start_wall = datetime.now()
+        live_calls.call_started()
+        self._live_call_counted = True
 
         start = msg.get("start", {})
         self._sid = (
@@ -1776,6 +1794,8 @@ class CallSession:
         if self._ended:
             return
         self._ended = True
+        if self._live_call_counted:
+            live_calls.call_ended()
 
         if self._watchdog_task:
             self._watchdog_task.cancel()
@@ -1787,6 +1807,10 @@ class CallSession:
             latencies = s.call_metrics.get("latencies") or []
             if latencies:
                 s.call_metrics["avg_latency_s"] = round(sum(latencies) / len(latencies), 3)
+
+            rag_latencies = s.call_metrics.get("rag_latencies") or []
+            if rag_latencies:
+                s.call_metrics["avg_rag_latency_s"] = round(sum(rag_latencies) / len(rag_latencies), 3)
 
             recording_path = self._write_recording()
             if recording_path:

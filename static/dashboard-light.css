@@ -1,0 +1,688 @@
+/* Master Dashboard — enterprise analytics theme. Deliberately white/light,
+   a departure from dashboard.css's warm-charcoal theme used everywhere
+   else: this page's job is dense data reading, not brand mood, and a light
+   surface reads better for that. Colors below are the dataviz skill's own
+   validated default palette (references/palette.md), used unmodified —
+   never eyeballed. Hot/Warm/Cold reuse this app's own established red/
+   orange/blue lead-temperature meaning (see dashboard.css) rather than the
+   generic status scale, since "Hot lead" is a good thing, not a critical/
+   bad one — status-palette semantics would be backwards here. */
+
+* { box-sizing: border-box; }
+
+:root {
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-hover: #f2f1ee;
+  --border: #e1e0d9;
+  --border-strong: rgba(11,11,11,0.10);
+
+  --ink: #0b0b0b;
+  --ink-secondary: #52514e;
+  --ink-muted: #898781;
+  --gridline: #e1e0d9;
+  --axis: #c3c2b7;
+
+  --brand: #184f95;
+
+  /* categorical slots (documented default order, unmodified) */
+  --c-blue: #2a78d6;
+  --c-orange: #eb6834;
+  --c-aqua: #1baf7a;
+  --c-violet: #4a3aa7;
+
+  /* lead-temperature scale — this app's own fixed reserved meaning */
+  --hot: #d03b3b;
+  --warm: #eb6834;
+  --cold: #2a78d6;
+
+  /* call-direction scale — matches the arrow-badge convention on the other dashboards */
+  --in: #d03b3b;
+  --out: #0ca30c;
+
+  --good-text: #006300;
+
+  /* Icon-badge tint pairs (bg/fg) — the light-theme equivalent of the
+     reference mockup's colored gradient icon circles. Same underlying
+     hues as the categorical/status slots above, just paired with a pale
+     tint background instead of a dark card, since this theme is light. */
+  --icon-blue-bg: #eaf1fc; --icon-blue-fg: #2a78d6;
+  --icon-teal-bg: #e6f7f2; --icon-teal-fg: #1baf7a;
+  --icon-green-bg: #e8f8ec; --icon-green-fg: #0ca30c;
+  --icon-orange-bg: #fdf1e8; --icon-orange-fg: #eb6834;
+  --icon-violet-bg: #f0edfb; --icon-violet-fg: #4a3aa7;
+  --icon-red-bg: #fbebeb; --icon-red-fg: #d03b3b;
+
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--page);
+  color: var(--ink);
+  margin: 0;
+}
+
+/* ── Header / nav — same structure as dashboard.css, light palette. No
+   sidebar — a plain top bar, matching the other three dashboards. ──────── */
+
+header.top {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  background: var(--surface);
+}
+header.top .brand { display: flex; align-items: center; gap: 0.55rem; }
+header.top .brand .mark {
+  width: 30px; height: 30px; border-radius: 8px;
+  background: linear-gradient(135deg, #4a3aa7, #184f95);
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 800; font-size: 0.95rem; flex-shrink: 0;
+}
+header.top h1 { font-size: 1.05rem; margin: 0; font-weight: 700; letter-spacing: -0.01em; color: var(--ink); }
+header.top .tagline { font-size: 0.72rem; color: var(--ink-muted); margin-top: 0.1rem; }
+
+nav.top { display: flex; align-items: center; gap: 0.4rem; }
+nav.top a {
+  color: var(--ink-secondary); text-decoration: none; font-size: 0.84rem;
+  padding: 0.4rem 0.8rem; border-radius: 7px; display: inline-flex; align-items: center; gap: 0.4rem;
+  transition: background 0.12s, color 0.12s;
+}
+nav.top a.active { color: #fff; background: var(--brand); font-weight: 600; }
+nav.top a:hover:not(.active) { color: var(--ink); background: var(--surface-hover); }
+nav.top a.logout { color: var(--ink-muted); margin-left: 0.4rem; }
+nav.top a.logout:hover { color: var(--hot); background: none; }
+
+/* ── Page shell ───────────────────────────────────────────────────────── */
+
+#wrap { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
+
+.section-title {
+  font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700;
+  color: var(--ink-muted); margin: 2rem 0 0.85rem; display: flex; align-items: center; gap: 0.4rem;
+}
+.section-title:first-child { margin-top: 0; }
+.section-title svg { width: 14px; height: 14px; color: var(--brand); }
+
+/* ── Stat tiles ───────────────────────────────────────────────────────── */
+
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0.85rem; }
+
+/* Leads page's KPI strip is always exactly 6 tiles (the 5 shared ones plus
+   "Distinct leads") — auto-fit's minmax(190px,1fr) above wraps that 6th tile
+   onto its own near-empty row on plenty of ordinary desktop widths (190px is
+   sized for a comfortable card, not for "6 must always fit"). Fixed 6 equal
+   columns instead — the cards shrink to fit the row rather than one
+   wrapping alone underneath it. minmax(0, 1fr), not minmax(190px, 1fr): a
+   plain 1fr still honors each tile's min-content width, which reintroduces
+   the same wrap at narrow widths this exists to fix. */
+.stat-grid-6up { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+@media (max-width: 720px) { .stat-grid-6up { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); } }
+
+.stat-tile {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 1rem 1.1rem; position: relative; overflow: hidden;
+}
+.stat-tile::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: var(--stat-accent, var(--brand));
+}
+.stat-tile .sicon { color: var(--stat-accent, var(--brand)); display: inline-block; margin-bottom: 0.5rem; }
+.stat-tile .sicon svg { width: 19px; height: 19px; display: block; }
+.stat-tile .slabel { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); font-weight: 700; }
+.stat-tile .sval { font-family: var(--font); font-variant-numeric: tabular-nums; font-size: 1.65rem; font-weight: 700; color: var(--ink); margin-top: 0.25rem; line-height: 1.15; }
+.stat-tile .ssub { font-size: 0.75rem; color: var(--ink-secondary); margin-top: 0.3rem; }
+
+/* ── Chart cards ──────────────────────────────────────────────────────── */
+
+.chart-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.8rem; align-items: stretch; }
+
+.chart-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 0.9rem 1rem 1rem; overflow: hidden;
+}
+.chart-card h4 {
+  margin: 0 0 0.15rem; font-size: 0.82rem; font-weight: 700; color: var(--ink);
+  display: flex; align-items: center; gap: 0.4rem;
+}
+.chart-card h4 svg { width: 13px; height: 13px; color: var(--brand); }
+.chart-card .chart-sub { font-size: 0.72rem; color: var(--ink-muted); margin: 0 0 0.65rem; }
+.chart-card .chart-scroll { overflow-x: auto; }
+.chart-card .chart-empty { color: var(--ink-muted); font-size: 0.82rem; text-align: center; padding: 2rem 0; font-style: italic; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 0.9rem; margin-top: 0.7rem; font-size: 0.78rem; color: var(--ink-secondary); }
+.legend .lswatch { display: inline-flex; align-items: center; gap: 0.35rem; font-weight: 600; }
+.legend .ldot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+/* ── Hand-rolled SVG bar / donut charts ───────────────────────────────── */
+
+.bars-svg { width: 100%; overflow: visible; }
+.bars-svg .bar-value { font-family: var(--font); font-variant-numeric: tabular-nums; font-size: 10px; font-weight: 700; fill: var(--ink); }
+.bars-svg .bar-cat-label { font-size: 10px; fill: var(--ink-muted); }
+.bars-svg .bar-gridline { stroke: var(--gridline); stroke-width: 1; }
+.bars-svg .bar-axis { stroke: var(--axis); stroke-width: 1; }
+.bars-svg rect.bar { rx: 4; }
+.bars-svg rect.bar:hover { opacity: 0.85; }
+
+.donut-wrap { display: flex; align-items: center; gap: 1.4rem; flex-wrap: wrap; justify-content: center; }
+.donut-svg circle.donut-seg { fill: none; stroke-width: 16; transition: stroke-width 0.12s; }
+.donut-svg circle.donut-seg:hover { stroke-width: 18; }
+.donut-center-label { font-family: var(--font); font-weight: 700; }
+.donut-center-value { font-size: 1.5rem; fill: var(--ink); }
+.donut-center-sub { font-size: 0.6rem; fill: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+.donut-legend { display: flex; flex-direction: column; gap: 0.6rem; }
+.donut-legend .lrow { display: flex; align-items: center; gap: 0.55rem; font-size: 0.85rem; }
+.donut-legend .ldot { width: 11px; height: 11px; border-radius: 3px; flex-shrink: 0; }
+.donut-legend .lname { color: var(--ink-secondary); flex: 1; }
+.donut-legend .lval { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 700; color: var(--ink); }
+
+.empty-page { text-align: center; color: var(--ink-muted); padding: 4rem 0; font-size: 0.92rem; }
+.empty-page svg { width: 34px; height: 34px; margin-bottom: 0.75rem; opacity: 0.5; }
+
+/* ── Model performance / pending-callbacks tables ────────────────────────── */
+
+table.mtable { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+table.mtable th, table.mtable td { padding: 0.55rem 0.7rem; text-align: left; white-space: nowrap; }
+table.mtable th {
+  color: var(--ink-muted); font-weight: 700; font-size: 0.68rem; text-transform: uppercase;
+  letter-spacing: 0.04em; border-bottom: 1px solid var(--border);
+}
+table.mtable td { border-bottom: 1px solid var(--border); color: var(--ink-secondary); }
+table.mtable td.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+table.mtable tbody tr:last-child td { border-bottom: none; }
+
+/* ── Hero stat cards — same footprint as .stat-tile (icon + label + value +
+   sub), just with a tinted icon badge / sparkline / delta swapped in for
+   the plain accent bar. Sized to match, not to stand out. ────────────────── */
+
+.hero-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0.85rem; }
+
+.stat-card-v2 {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.1rem;
+}
+.stat-card-v2 .sc-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 0.5rem; }
+.stat-card-v2 .sc-icon {
+  width: 30px; height: 30px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+  background: var(--sc-bg, var(--icon-blue-bg)); color: var(--sc-fg, var(--icon-blue-fg));
+}
+.stat-card-v2 .sc-icon svg { width: 16px; height: 16px; display: block; }
+.stat-card-v2 .sc-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); font-weight: 700; }
+.stat-card-v2 .sc-value { font-size: 1.4rem; font-weight: 800; color: var(--ink); margin-top: 0.2rem; letter-spacing: -0.01em; line-height: 1.15; }
+.stat-card-v2 .sc-delta { font-size: 0.72rem; font-weight: 700; display: inline-flex; align-items: center; gap: 0.22rem; margin-top: 0.3rem; }
+.stat-card-v2 .sc-delta svg { width: 11px; height: 11px; }
+.stat-card-v2 .sc-delta.up { color: var(--good-text); }
+.stat-card-v2 .sc-delta.down { color: var(--hot); }
+.stat-card-v2 .sc-delta.flat { color: var(--ink-muted); }
+.stat-card-v2 .sc-delta .sc-delta-sub { color: var(--ink-muted); font-weight: 500; margin-left: 0.12rem; }
+.stat-card-v2 .sc-spark { margin-top: 0.45rem; height: 24px; width: 100%; overflow: visible; }
+.stat-card-v2 .sc-sub { font-size: 0.75rem; color: var(--ink-muted); margin-top: 0.35rem; }
+.stat-card-v2 .sc-link { font-size: 0.75rem; color: var(--brand); font-weight: 700; text-decoration: none; margin-top: 0.35rem; display: inline-block; }
+.stat-card-v2 .sc-link:hover { text-decoration: underline; }
+
+.live-dot {
+  width: 9px; height: 9px; border-radius: 50%; background: var(--good-text); display: inline-block;
+  animation: live-pulse 2s infinite;
+}
+@keyframes live-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(12,99,12,0.45); }
+  70% { box-shadow: 0 0 0 7px rgba(12,99,12,0); }
+  100% { box-shadow: 0 0 0 0 rgba(12,99,12,0); }
+}
+
+/* ── System Health / AI Insights / Recent Calls panels ───────────────────── */
+
+.panel-list { display: flex; flex-direction: column; }
+
+.health-row { display: flex; align-items: center; gap: 0.7rem; padding: 0.65rem 0; border-bottom: 1px solid var(--border); }
+.health-row:last-child { border-bottom: none; padding-bottom: 0; }
+.health-row:first-child { padding-top: 0; }
+.health-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.health-dot.operational { background: var(--good-text); }
+.health-dot.down { background: var(--hot); }
+.health-name { flex: 1; font-size: 0.85rem; font-weight: 700; color: var(--ink); }
+.health-status { font-size: 0.72rem; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.health-status.operational { color: var(--good-text); }
+.health-status.down { color: var(--hot); }
+.health-latency { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 0.78rem; color: var(--ink-secondary); min-width: 3.5rem; text-align: right; }
+
+.insight-row { display: flex; gap: 0.75rem; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+.insight-row:last-child { border-bottom: none; padding-bottom: 0; }
+.insight-row:first-child { padding-top: 0; }
+.insight-icon {
+  width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+  background: var(--icon-violet-bg); color: var(--icon-violet-fg);
+  display: flex; align-items: center; justify-content: center;
+}
+.insight-icon svg { width: 15px; height: 15px; }
+.insight-text { font-size: 0.84rem; color: var(--ink-secondary); line-height: 1.45; padding-top: 0.15rem; }
+
+.panel-empty { color: var(--ink-muted); font-size: 0.82rem; font-style: italic; padding: 0.5rem 0; }
+
+.panel-footer-link { font-size: 0.78rem; color: var(--brand); font-weight: 700; text-decoration: none; }
+.panel-footer-link:hover { text-decoration: underline; }
+.chart-card .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.9rem; }
+.chart-card .panel-head h4 { margin: 0; }
+
+/* ── Recent Calls compact table ───────────────────────────────────────────── */
+
+table.recent-table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+table.recent-table th {
+  color: var(--ink-muted); font-weight: 700; font-size: 0.66rem; text-transform: uppercase;
+  letter-spacing: 0.04em; text-align: left; padding: 0 0.6rem 0.5rem 0; border-bottom: 1px solid var(--border);
+}
+table.recent-table td { padding: 0.55rem 0.6rem 0.55rem 0; border-bottom: 1px solid var(--border); color: var(--ink-secondary); vertical-align: middle; }
+table.recent-table tbody tr:last-child td { border-bottom: none; }
+table.recent-table td.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+table.recent-table .rc-name { display: flex; align-items: center; gap: 0.55rem; font-weight: 700; color: var(--ink); }
+table.recent-table .rc-avatar {
+  width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 0.68rem; font-weight: 700; color: #fff; background: var(--avatar-bg, var(--ink-muted));
+}
+.rc-status { padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.7rem; font-weight: 700; display: inline-block; }
+.rc-status.booked { background: var(--icon-teal-bg); color: var(--icon-teal-fg); }
+.rc-status.pending { background: var(--gridline); color: var(--ink-muted); }
+
+/* ── Sidebar navigation — shared across all four dashboard pages ────────── */
+
+.app-shell { display: flex; align-items: flex-start; min-height: 100vh; }
+
+.sidebar {
+  width: 208px; flex-shrink: 0; min-height: 100vh; position: sticky; top: 0;
+  background: var(--surface); border-right: 1px solid var(--border);
+  padding: 1rem 0.75rem; display: flex; flex-direction: column;
+  transition: width 0.16s ease, padding 0.16s ease;
+  overflow: hidden;
+}
+.sidebar.collapsed { width: 60px; padding: 1rem 0.55rem; }
+
+.sidebar-top { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; padding: 0 0.3rem 1.1rem; }
+.sidebar .brand { display: flex; align-items: center; gap: 0.55rem; min-width: 0; }
+.sidebar .brand .mark {
+  width: 28px; height: 28px; border-radius: 8px;
+  background: linear-gradient(135deg, #4a3aa7, #184f95);
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 800; font-size: 0.9rem; flex-shrink: 0;
+}
+.sidebar .brand-text { white-space: nowrap; overflow: hidden; }
+.sidebar .brand h1 { font-size: 0.9rem; margin: 0; font-weight: 700; letter-spacing: -0.01em; color: var(--ink); }
+.sidebar .brand .tagline { font-size: 0.64rem; color: var(--ink-muted); margin-top: 0.05rem; }
+.sidebar.collapsed .brand-text { display: none; }
+
+.sidebar-toggle {
+  background: none; border: 1px solid var(--border); color: var(--ink-muted);
+  width: 26px; height: 26px; border-radius: 7px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.sidebar-toggle svg { width: 14px; height: 14px; }
+.sidebar-toggle:hover { background: var(--surface-hover); color: var(--ink); }
+.sidebar.collapsed .sidebar-top { justify-content: center; }
+.sidebar.collapsed .brand { display: none; }
+
+nav.side-nav { display: flex; flex-direction: column; gap: 0.15rem; flex: 1; }
+nav.side-nav a {
+  display: flex; align-items: center; gap: 0.65rem; padding: 0.55rem 0.65rem; border-radius: 8px;
+  color: var(--ink-secondary); text-decoration: none; font-size: 0.84rem; font-weight: 600;
+  white-space: nowrap; overflow: hidden; transition: background 0.12s, color 0.12s;
+}
+nav.side-nav a svg { width: 16px; height: 16px; flex-shrink: 0; }
+nav.side-nav a.active { background: var(--icon-violet-bg); color: var(--c-violet); }
+nav.side-nav a:hover:not(.active) { background: var(--surface-hover); color: var(--ink); }
+.sidebar.collapsed nav.side-nav a { justify-content: center; padding: 0.6rem; }
+.sidebar.collapsed nav.side-nav a .nav-label { display: none; }
+
+.sidebar .logout-link {
+  display: flex; align-items: center; gap: 0.65rem; padding: 0.55rem 0.65rem; border-radius: 8px;
+  color: var(--ink-muted); text-decoration: none; font-size: 0.84rem; font-weight: 600;
+  white-space: nowrap; overflow: hidden; margin-top: 0.3rem;
+}
+.sidebar .logout-link svg { width: 16px; height: 16px; flex-shrink: 0; }
+.sidebar .logout-link:hover { color: var(--hot); background: var(--icon-red-bg); }
+.sidebar.collapsed .logout-link { justify-content: center; padding: 0.6rem; }
+.sidebar.collapsed .logout-link .nav-label { display: none; }
+
+.main-area { flex: 1; min-width: 0; }
+
+.page-topbar {
+  padding: 1rem 1.5rem; border-bottom: 1px solid var(--border); background: var(--surface);
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+}
+.page-topbar h2 { font-size: 1.05rem; margin: 0; font-weight: 700; color: var(--ink); letter-spacing: -0.01em; }
+.page-topbar p { font-size: 0.74rem; color: var(--ink-muted); margin: 0.15rem 0 0; }
+
+/* ── Ported from the old dark theme (dashboard.css, now retired) — same
+   components, light-theme colors, so every page shares one visual system. ── */
+
+/* A grid item WITHIN .stat-grid (see dashboard.html/dashboard_inbound.html —
+   renderKpiRow's tiles + this are appended into the same #kpis container).
+   Spans EVERY track (1 / -1), not a fixed span of 2: auto-fit's column count
+   depends on container width, so a fixed span-2 only fills the whole row
+   when the tile count above happens to divide evenly into it — confirmed
+   bug: with 6 KPI tiles ahead of it, this card landed alone on its own row
+   occupying just 2 of that row's columns, leaving the rest of the row (up
+   to ~2/3 of the width) visibly empty to the right. Full-width guarantees it
+   always fills its row regardless of how many columns the tiles above wrap
+   into. */
+.trend-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 0.85rem 1rem; display: flex; flex-direction: column; gap: 0.4rem;
+  grid-column: 1 / -1; min-width: 0;
+}
+.trend-card .tlabel { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); font-weight: 700; white-space: nowrap; display: flex; align-items: center; gap: 0.4rem; }
+.trend-card .tlabel svg { width: 13px; height: 13px; flex-shrink: 0; color: var(--brand); }
+.trend-card svg { height: 26px; width: 100%; overflow: visible; }
+.trend-card .tcount { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 0.95rem; color: var(--ink); font-weight: 700; white-space: nowrap; }
+
+table.calls { width: 100%; border-collapse: collapse; font-size: 0.87rem; }
+table.calls th, table.calls td { padding: 0.55rem 0.8rem; text-align: left; }
+table.calls th {
+  color: var(--ink-muted); font-weight: 700; font-size: 0.68rem; text-transform: uppercase;
+  letter-spacing: 0.05em; border-bottom: 1px solid var(--border);
+}
+table.calls th .ico { display: inline-block; vertical-align: -2px; margin-right: 0.3rem; opacity: 0.75; }
+table.calls th .ico svg { width: 12px; height: 12px; display: block; }
+table.calls tbody tr { border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.12s; }
+table.calls tbody tr:hover { background: var(--surface-hover); }
+table.calls td.name-cell { display: flex; align-items: center; gap: 0.55rem; font-weight: 700; color: var(--ink); }
+table.calls td.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+table.calls td.muted { color: var(--ink-muted); }
+
+.avatar {
+  width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.68rem; font-weight: 700; color: #fff;
+  background: var(--avatar-bg, var(--ink-muted));
+}
+
+.tag { padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.71rem; font-weight: 700; display: inline-flex; align-items: center; gap: 0.3rem; }
+.tag svg { width: 10px; height: 10px; }
+.tag.Hot { background: var(--icon-red-bg); color: var(--hot); }
+.tag.Warm { background: var(--icon-orange-bg); color: var(--warm); }
+.tag.Cold { background: var(--icon-blue-bg); color: var(--cold); }
+
+.badge { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; font-weight: 600; }
+.badge svg { width: 12px; height: 12px; }
+.badge.yes { color: var(--good-text); }
+.badge.no { color: var(--ink-muted); font-weight: 400; }
+.badge a { color: var(--brand); text-decoration: none; }
+.badge a:hover { text-decoration: underline; }
+
+/* ── Inbound/outbound call-count badge (red arrow in, green arrow out) ──── */
+
+.call-counts { display: inline-flex; align-items: center; gap: 0.6rem; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.ccount { display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.82rem; font-weight: 700; }
+.ccount svg { width: 12px; height: 12px; display: block; }
+.ccount.in { color: var(--hot); }
+.ccount.out { color: var(--good-text); }
+
+/* ── Direction tag (Meetings page) — icon+label, sized/aligned like the
+   .badge/.ccount patterns above. Previously a bare icon() call with no
+   sizing rule at all, so the unsized <svg> rendered at its ~300x150px
+   intrinsic size — same class of bug as the "Icons rendering huge" fix
+   documented for .kicon/.ico/.ticon, just never applied here since this
+   markup was added later. Also fixes the color never actually applying to
+   "Outbound" rows: the old inline style referenced var(--good), a custom
+   property that was never defined anywhere in this file (only --good-text
+   is) — an undefined var() falls back to the property's inherited value,
+   so outbound rows silently rendered in default ink instead of green. ──── */
+.direction-tag { display: inline-flex; align-items: center; gap: 0.35rem; font-weight: 600; font-size: 0.85rem; }
+.direction-tag svg { width: 13px; height: 13px; display: block; flex-shrink: 0; }
+.direction-tag.inbound { color: var(--hot); }
+.direction-tag.outbound { color: var(--good-text); }
+
+/* ── Date-range filter bar — Meetings page + Master Dashboard ────────────── */
+.date-filter-bar { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.date-filter-bar label { font-size: 0.74rem; color: var(--ink-muted); font-weight: 600; }
+.date-filter-bar input[type="date"] {
+  font-family: var(--font); font-size: 0.82rem; color: var(--ink);
+  background: var(--page); border: 1px solid var(--border); border-radius: 7px;
+  padding: 0.36rem 0.6rem;
+}
+.date-filter-bar button {
+  font-family: var(--font); font-size: 0.8rem; font-weight: 600; cursor: pointer;
+  border-radius: 7px; padding: 0.38rem 0.75rem; border: 1px solid var(--border);
+  background: var(--surface); color: var(--ink-secondary); transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.date-filter-bar button:hover { background: var(--surface-hover); color: var(--ink); }
+.date-filter-bar button.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+.date-filter-bar button.primary:hover { background: #123f78; }
+.date-filter-bar .date-filter-note { font-size: 0.76rem; color: var(--brand); font-weight: 600; }
+
+/* ── Multi-call detail panel (one contact, several calls) ───────────────── */
+
+#detail .dsub .call-counts { margin-left: 0.6rem; }
+
+.calls-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.call-row {
+  display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.65rem;
+  background: var(--page); border: 1px solid var(--border); border-radius: 9px;
+  cursor: pointer; transition: background 0.12s, border-color 0.12s;
+}
+.call-row:hover { background: var(--surface-hover); }
+.call-row.expanded { border-color: var(--brand); background: var(--icon-blue-bg); }
+.call-row .crow-dir { display: flex; flex-shrink: 0; }
+.call-row .crow-dir svg { width: 13px; height: 13px; display: block; }
+.call-row .crow-date { flex: 1; font-size: 0.8rem; color: var(--ink-secondary); }
+.call-row .crow-cost { font-size: 0.8rem; color: var(--ink); }
+
+.call-detail-expanded { margin: -0.2rem 0 0.6rem; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.call-detail-expanded .section:first-child { border-top: none; }
+.call-detail-expanded .section:last-child { border-bottom: none; }
+
+.empty { text-align: center; color: var(--ink-muted); padding: 3rem 0; font-size: 0.88rem; }
+.empty svg { width: 30px; height: 30px; margin-bottom: 0.7rem; opacity: 0.5; }
+
+/* ── Meetings page — join button + outcome actions ───────────────────────── */
+
+.join-btn {
+  display: inline-flex; align-items: center; gap: 0.4rem; text-decoration: none;
+  background: var(--brand); color: #fff; font-weight: 700; font-size: 0.8rem;
+  padding: 0.38rem 0.75rem; border-radius: 7px; transition: background 0.12s, transform 0.12s;
+}
+.join-btn svg { width: 12px; height: 12px; }
+.join-btn:hover { background: #123f78; }
+.join-btn:active { transform: scale(0.97); }
+
+.outcome-actions { display: inline-flex; align-items: center; gap: 0.4rem; }
+.outcome-btn {
+  background: var(--surface); border: 1px solid var(--border); color: var(--ink-muted);
+  border-radius: 6px; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.outcome-btn svg { width: 13px; height: 13px; }
+.outcome-btn:hover { border-color: var(--ink-muted); color: var(--ink); }
+.outcome-btn.good.active { background: var(--icon-green-bg); border-color: var(--good-text); color: var(--good-text); }
+.outcome-btn.bad.active { background: var(--icon-red-bg); border-color: var(--hot); color: var(--hot); }
+.outcome-label { font-size: 0.76rem; color: var(--ink-muted); }
+.outcome-label.completed { color: var(--good-text); }
+.outcome-label.no_show { color: var(--hot); }
+
+/* ── Slide-in detail panel ───────────────────────────────────────────────── */
+
+#overlay { position: fixed; inset: 0; background: rgba(11,11,11,0.35); opacity: 0; pointer-events: none;
+           transition: opacity 0.2s; z-index: 10; }
+#overlay.open { opacity: 1; pointer-events: auto; }
+
+#detail { position: fixed; top: 0; right: -500px; width: 500px; max-width: 92vw; height: 100vh;
+          background: var(--surface); border-left: 1px solid var(--border); transition: right 0.25s ease;
+          overflow-y: auto; z-index: 11; }
+#detail.open { right: 0; }
+
+#detail .dhead { position: sticky; top: 0; background: var(--surface); padding: 1.1rem 1.4rem 0.9rem;
+                 border-bottom: 1px solid var(--border); z-index: 1; }
+#detail .dclose {
+  position: absolute; top: 0.85rem; right: 1rem; cursor: pointer; color: var(--ink-muted);
+  background: var(--page); border: 1px solid var(--border); border-radius: 8px;
+  width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+}
+#detail .dclose:hover { color: var(--ink); border-color: var(--brand); }
+#detail .dclose svg { width: 14px; height: 14px; }
+#detail .davatar { width: 42px; height: 42px; font-size: 0.95rem; margin-bottom: 0.55rem; }
+#detail .dname { font-size: 1.1rem; font-weight: 700; color: var(--ink); margin: 0 0 0.2rem; padding-right: 2.5rem; }
+#detail .dsub { color: var(--ink-secondary); font-size: 0.82rem; }
+
+#detail .section { padding: 1rem 1.4rem; border-bottom: 1px solid var(--border); }
+#detail .section h3 {
+  margin: 0 0 0.7rem; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--ink-muted); font-weight: 700; display: flex; align-items: center; gap: 0.4rem;
+}
+#detail .section h3 svg { width: 13px; height: 13px; color: var(--brand); }
+
+.kv { display: grid; grid-template-columns: 116px 1fr; gap: 0.45rem 0.7rem; font-size: 0.85rem; }
+.kv dt { color: var(--ink-muted); display: flex; align-items: center; gap: 0.35rem; }
+.kv dt svg { width: 12px; height: 12px; opacity: 0.7; }
+.kv dd { margin: 0; color: var(--ink); }
+.kv dd.empty-val { color: var(--ink-muted); font-style: italic; }
+
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+.tile { background: var(--page); border: 1px solid var(--border); border-radius: 10px; padding: 0.65rem 0.8rem; }
+.tile .ticon { display: inline-block; color: var(--tile-accent, var(--brand)); margin-bottom: 0.3rem; }
+.tile .ticon svg { width: 15px; height: 15px; display: block; }
+.tile .tlabel { color: var(--ink-muted); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.03em; font-weight: 600; }
+.tile .tval { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink); font-size: 1.1rem; font-weight: 700; margin-top: 0.15rem; }
+.tile .tsub { color: var(--ink-muted); font-size: 0.7rem; margin-top: 0.15rem; }
+
+.priced-against { color: var(--ink-muted); font-size: 0.76rem; margin: -0.35rem 0 0.8rem; }
+.priced-against code { color: var(--brand); background: var(--page); padding: 0.05rem 0.4rem; border-radius: 4px; font-family: var(--font-mono); }
+
+table.utable { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 0.7rem; }
+table.utable th { color: var(--ink-muted); font-weight: 700; text-align: right; font-size: 0.66rem;
+                  text-transform: uppercase; padding: 0.32rem 0.4rem; border-bottom: 1px solid var(--border); }
+table.utable th:first-child { text-align: left; }
+table.utable td { padding: 0.35rem 0.4rem; text-align: right; border-bottom: 1px solid var(--border); color: var(--ink);
+                   font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+table.utable td:first-child { text-align: left; color: var(--ink-secondary); font-family: var(--font); }
+table.utable tr.total td { font-weight: 700; color: var(--brand); border-top: 1px solid var(--border-strong); border-bottom: none; }
+
+audio { width: 100%; height: 34px; border-radius: 8px; }
+.no-recording { color: var(--ink-muted); font-size: 0.83rem; font-style: italic; }
+
+.transcript { display: flex; flex-direction: column; gap: 0.45rem; }
+.msg { padding: 0.5rem 0.75rem; border-radius: 10px; font-size: 0.83rem; line-height: 1.4; max-width: 90%; }
+.msg.user { background: var(--page); align-self: flex-start; border: 1px solid var(--border); }
+.msg.assistant { background: var(--icon-blue-bg); align-self: flex-end; border: 1px solid #d3e2f6; }
+.msg .role { display: block; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em;
+             color: var(--ink-muted); margin-bottom: 0.25rem; font-weight: 700; }
+
+/* ── Models button + switcher modal ──────────────────────────────────────── */
+
+.models-btn {
+  display: inline-flex; align-items: center; gap: 0.42rem;
+  background: var(--page); border: 1px solid var(--border); color: var(--ink-secondary);
+  font-size: 0.78rem; font-weight: 600; font-family: var(--font);
+  padding: 0.38rem 0.7rem; border-radius: 7px; cursor: pointer;
+  margin-right: 0.5rem; transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.models-btn svg { width: 13px; height: 13px; display: block; flex-shrink: 0; color: var(--brand); }
+.models-btn:hover { background: var(--surface-hover); color: var(--ink); border-color: var(--ink-muted); }
+.models-btn #model-badge { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.modal-overlay { position: fixed; inset: 0; background: rgba(11,11,11,0.4); opacity: 0; pointer-events: none;
+                 transition: opacity 0.2s; z-index: 20; }
+.modal-overlay.open { opacity: 1; pointer-events: auto; }
+
+.modal {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -48%);
+  width: 440px; max-width: 92vw; max-height: 82vh; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  padding: 1.3rem; opacity: 0; pointer-events: none; transition: opacity 0.18s, transform 0.18s;
+  z-index: 21; box-shadow: 0 20px 50px rgba(11,11,11,0.18);
+}
+.modal.open { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%); }
+
+.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.3rem; }
+.modal-head h2 { font-size: 0.98rem; margin: 0; display: flex; align-items: center; gap: 0.5rem; font-weight: 700; color: var(--ink); }
+.modal-head h2 svg { width: 15px; height: 15px; display: block; color: var(--brand); }
+.modal-close { background: none; border: none; color: var(--ink-muted); cursor: pointer; padding: 0.3rem; border-radius: 6px; display: flex; }
+.modal-close svg { width: 15px; height: 15px; display: block; }
+.modal-close:hover { color: var(--ink); background: var(--surface-hover); }
+
+.modal-sub { font-size: 0.76rem; color: var(--ink-muted); margin: 0.2rem 0 1rem; line-height: 1.4; }
+
+.model-groups { display: flex; flex-direction: column; gap: 1rem; }
+.model-group-label { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); font-weight: 700; margin-bottom: 0.4rem; }
+
+.model-option {
+  display: block; width: 100%; text-align: left; background: var(--page); border: 1px solid var(--border);
+  border-radius: 9px; padding: 0.58rem 0.72rem; margin-bottom: 0.4rem; cursor: pointer; color: var(--ink);
+  font-family: var(--font); transition: background 0.12s, border-color 0.12s;
+}
+.model-option:last-child { margin-bottom: 0; }
+.model-option:hover:not(.active):not(:disabled) { background: var(--surface-hover); border-color: var(--ink-muted); }
+.model-option:disabled { cursor: default; opacity: 0.6; }
+.model-option.active { border-color: var(--brand); background: var(--icon-blue-bg); }
+
+.model-option-main { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.model-option-name { font-size: 0.85rem; font-weight: 700; }
+.model-option-current { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.66rem; font-weight: 700; color: var(--brand); text-transform: uppercase; letter-spacing: 0.03em; }
+.model-option-current svg { width: 11px; height: 11px; display: block; }
+.model-option-note { font-size: 0.74rem; color: var(--ink-secondary); margin-top: 0.2rem; line-height: 1.35; }
+
+.model-status { margin-top: 1rem; font-size: 0.8rem; color: var(--ink-secondary); display: flex; align-items: center; gap: 0.5rem; min-height: 1.2rem; }
+.model-status:empty { display: none; }
+.model-status .spinner {
+  width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--border);
+  border-top-color: var(--brand); animation: model-spin 0.7s linear infinite; flex-shrink: 0;
+}
+@keyframes model-spin { to { transform: rotate(360deg); } }
+
+/* ── Leads panel (master dashboard) — filterable list of distinct contacts ── */
+
+.leads-filter { display: inline-flex; gap: 0.3rem; margin-bottom: 0.7rem; }
+/* In the Leads page's topbar (a flex row, vertically centered) rather than
+   stacked above .leads-list, that margin-bottom has nothing to balance
+   against and just nudges the buttons off-center relative to the title. */
+.page-topbar .leads-filter { margin-bottom: 0; }
+.leads-filter button {
+  background: var(--page); border: 1px solid var(--border); color: var(--ink-secondary);
+  font-size: 0.74rem; font-weight: 700; padding: 0.3rem 0.65rem; border-radius: 999px; cursor: pointer;
+  font-family: var(--font); transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.leads-filter button:hover { background: var(--surface-hover); }
+.leads-filter button.active { background: var(--ink); border-color: var(--ink); color: #fff; }
+.leads-list { display: flex; flex-direction: column; }
+.lead-row { display: flex; align-items: center; gap: 0.65rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+.lead-row:last-child { border-bottom: none; padding-bottom: 0; }
+.lead-row:first-child { padding-top: 0; }
+.lead-row .lead-name { flex: 1; font-size: 0.85rem; font-weight: 700; color: var(--ink); }
+.lead-row .lead-phone { font-size: 0.78rem; color: var(--ink-muted); font-family: var(--font-mono); }
+
+/* ── Call outcomes — vertical stat rows (replaces the earlier donut) ────── */
+
+.outcome-cards { display: flex; flex-direction: column; }
+.outcome-card-row { display: flex; align-items: center; gap: 0.7rem; padding: 0.55rem 0; border-bottom: 1px solid var(--border); }
+.outcome-card-row:last-child { border-bottom: none; padding-bottom: 0; }
+.outcome-card-row:first-child { padding-top: 0; }
+.outcome-card-icon {
+  width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.outcome-card-icon svg { width: 15px; height: 15px; }
+.outcome-card-label { flex: 1; font-size: 0.85rem; font-weight: 700; color: var(--ink); }
+.outcome-card-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 700; color: var(--ink); font-size: 0.9rem; display: flex; align-items: baseline; gap: 0.4rem; }
+.outcome-card-pct { font-family: var(--font); font-weight: 600; color: var(--ink-muted); font-size: 0.74rem; }
+
+/* ── Leads page — insight panel (AI-generated per-contact analysis) ──────── */
+
+.insight-loading { display: flex; align-items: center; gap: 0.6rem; color: var(--ink-muted); font-size: 0.85rem; padding: 0.5rem 0; }
+.insight-loading .spinner {
+  width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border);
+  border-top-color: var(--brand); animation: model-spin 0.7s linear infinite; flex-shrink: 0;
+}
+.insight-summary { font-size: 0.88rem; color: var(--ink); line-height: 1.55; }
+.insight-list { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem; }
+.insight-list-item { display: flex; gap: 0.55rem; align-items: flex-start; font-size: 0.84rem; color: var(--ink-secondary); line-height: 1.4; }
+.insight-list-item::before { content: "\2022"; color: var(--brand); font-weight: 700; flex-shrink: 0; }
+.insight-unavailable { color: var(--ink-muted); font-style: italic; font-size: 0.83rem; }
+
+.level-badge { display: inline-flex; align-items: center; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.71rem; font-weight: 700; }
+.level-badge.High { background: var(--icon-green-bg); color: var(--good-text); }
+.level-badge.Medium { background: var(--icon-orange-bg); color: var(--warm); }
+.level-badge.Low { background: var(--icon-red-bg); color: var(--hot); }
+.level-badge.unknown { background: var(--gridline); color: var(--ink-muted); }
+
+.insight-reason { font-size: 0.78rem; color: var(--ink-muted); margin-top: 0.35rem; line-height: 1.4; }
+
+.mini-label { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-muted); font-weight: 700; margin-bottom: 0.3rem; }
+.badge-row { display: flex; gap: 0.6rem; margin-top: 0.8rem; flex-wrap: wrap; }

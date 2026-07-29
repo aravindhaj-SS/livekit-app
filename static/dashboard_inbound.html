@@ -3,40 +3,56 @@
 <head>
 <meta charset="utf-8">
 <title>Mira — Inbound Calls</title>
-<link rel="stylesheet" href="/static/dashboard.css?v=2">
+<link rel="stylesheet" href="/static/dashboard-light.css?v=6">
 </head>
 <body>
-<header class="top">
-  <div class="brand">
-    <span class="mark">M</span>
-    <div>
-      <h1>Mira — Calls</h1>
-      <div class="tagline">Swaran Soft voice agent</div>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-top">
+      <div class="brand">
+        <span class="mark">M</span>
+        <div class="brand-text">
+          <h1>Mira</h1>
+          <div class="tagline">Swaran Soft</div>
+        </div>
+      </div>
+      <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle sidebar"></button>
+    </div>
+    <nav class="side-nav">
+      <a href="/dashboard/master"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18M8 17V10M13 17V6M18 17v-4"/></svg><span class="nav-label">Master Dashboard</span></a>
+      <a href="/dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 8a4 4 0 0 1 4 4M15 4a8 8 0 0 1 8 8M22 16.9v2.6a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 3.8 2 2 0 0 1 4.1 1.6h2.6a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L7.6 9.6a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2Z"/></svg><span class="nav-label">Outbound</span></a>
+      <a href="/dashboard/inbound" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v2.6a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 3.8 2 2 0 0 1 4.1 1.6h2.6a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L7.6 9.6a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2Z"/><path d="M14 4h6v6M20 4l-7 7"/></svg><span class="nav-label">Inbound</span></a>
+      <a href="/dashboard/meetings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M9 16l2 2 4-4"/></svg><span class="nav-label">Meetings</span></a>
+      <a href="/dashboard/leads"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg><span class="nav-label">Leads</span></a>
+    </nav>
+    <a href="/logout" class="logout-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg><span class="nav-label">Log out</span></a>
+  </aside>
+
+  <div class="main-area">
+    <div class="page-topbar">
+      <div>
+        <h2>Inbound Calls</h2>
+        <p>Swaran Soft voice agent</p>
+      </div>
+      <button class="models-btn" id="models-btn" onclick="openModelModal()" title="Switch the realtime model for inbound calls">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
+        <span id="model-badge">Loading model…</span>
+      </button>
+    </div>
+    <div id="wrap">
+      <div class="stat-grid" id="kpis"></div>
+
+      <table class="calls">
+        <thead>
+          <tr>
+            <th>Name</th><th>Calls</th><th>Budget</th><th>Timeline</th><th>Decision Maker</th><th>Meeting</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="empty" id="empty" style="display:none">No inbound calls yet.</div>
     </div>
   </div>
-  <nav class="top">
-    <button class="models-btn" id="models-btn" onclick="openModelModal()" title="Switch the realtime model for inbound calls">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
-      <span id="model-badge">Loading model…</span>
-    </button>
-    <a href="/dashboard">Outbound</a>
-    <a href="/dashboard/inbound" class="active">Inbound</a>
-    <a href="/logout" class="logout">Log out</a>
-  </nav>
-</header>
-<div id="wrap">
-  <div class="kpi-row" id="kpis"></div>
-  <div id="trend"></div>
-
-  <table class="calls">
-    <thead>
-      <tr>
-        <th>Name</th><th>Budget</th><th>Timeline</th><th>Decision Maker</th><th>Meeting</th>
-      </tr>
-    </thead>
-    <tbody id="rows"></tbody>
-  </table>
-  <div class="empty" id="empty" style="display:none">No inbound calls yet.</div>
 </div>
 
 <div id="overlay" onclick="closeDetail()"></div>
@@ -53,139 +69,56 @@
 <div id="model-overlay" class="modal-overlay" onclick="closeModelModal(event)"></div>
 <div id="model-modal" class="modal"></div>
 
-<script src="/static/dashboard-common.js?v=3"></script>
+<script src="/static/dashboard-common.js?v=7"></script>
 <script>
-let calls = [];
+let calls = [];       // this direction only — unchanged semantics, feeds KPI row + trend
+let contacts = [];     // grouped by phone across BOTH directions, filtered to contacts with >=1 inbound call
+
+const DETAIL_OPTS = { interestIcon: 'building', interestLabel: 'Caller', unknownLabel: 'Unknown caller' };
 
 async function load() {
-  const res = await fetch('/api/calls?direction=inbound');
+  const res = await fetch('/api/calls');
   if (res.status === 401) { window.location = '/login'; return; }
-  calls = await res.json();
+  const allCalls = await res.json();
+  calls = allCalls.filter(c => c.direction === 'inbound');
 
-  const unidentified = calls.filter(c => !c.name).length;
+  // Grouped from the FULL cross-direction list so a contact's arrow badge
+  // shows their true inbound+outbound split (see groupCallsByContact), then
+  // kept only if they have at least one inbound call.
+  contacts = groupCallsByContact(allCalls).filter(ct => ct.inboundCount > 0);
+
+  // Counts DISTINCT CONTACTS never identified across ANY of their calls —
+  // not raw call rows. Confirmed real bug: counting rows with name=null
+  // showed 33 "unidentified callers" when the true number of people never
+  // identified across any call was 0 — every one of those 33 rows belonged
+  // to a repeat caller who DID give their name on a different call in the
+  // same phone group; the raw-row count was just tallying the same few
+  // people's silent calls multiple times each.
+  const unidentified = contacts.filter(ct => !ct.displayName).length;
   document.getElementById('kpis').innerHTML = renderKpiRow(calls, [
-    { icon: 'userCheck', accent: 'var(--warm)', label: 'Unidentified callers', val: unidentified.toLocaleString(), sub: 'name not captured' },
-  ]);
-  document.getElementById('trend').innerHTML = renderTrendCard(calls, 'Inbound call volume');
+    { icon: 'userCheck', accent: '--warm', label: 'Unidentified callers', val: unidentified.toLocaleString(), sub: 'never gave a name, any call' },
+  ]) + renderTrendCard(calls, 'Inbound call volume');
 
   const rows = document.getElementById('rows');
-  document.getElementById('empty').style.display = calls.length ? 'none' : 'block';
-  document.getElementById('empty').innerHTML = calls.length ? '' : `${ICON.inbox}<div>No inbound calls yet.</div>`;
+  document.getElementById('empty').style.display = contacts.length ? 'none' : 'block';
+  document.getElementById('empty').innerHTML = contacts.length ? '' : `${ICON.inbox}<div>No inbound calls yet.</div>`;
 
-  rows.innerHTML = calls.map((c, i) => `
+  // Classification/budget/timeline/decision-maker/booking status below all
+  // come from the contact aggregate — see groupCallsByContact's docstring.
+  rows.innerHTML = contacts.map((ct, i) => `
     <tr onclick="openDetail(${i})">
-      <td class="name-cell">${avatar(c.name, c.classification)}${esc(c.name) || '<span class="muted">Unknown caller</span>'}</td>
-      <td>${esc(c.budget) || '<span class="muted">—</span>'}</td>
-      <td>${esc(c.timeline) || '<span class="muted">—</span>'}</td>
-      <td>${esc(c.decision_maker_status) || '<span class="muted">—</span>'}</td>
-      <td>${meetingBadge(c)}</td>
+      <td class="name-cell">${avatar(ct.displayName, ct.bestClassification)}${esc(ct.displayName) || '<span class="muted">Unknown caller</span>'}</td>
+      <td>${callCountBadge(ct)}</td>
+      <td>${esc(ct.displayBudget) || '<span class="muted">—</span>'}</td>
+      <td>${esc(ct.displayTimeline) || '<span class="muted">—</span>'}</td>
+      <td>${esc(ct.displayDecisionMaker) || '<span class="muted">—</span>'}</td>
+      <td>${meetingBadge({ discovery_call_scheduled: ct.everBooked, meeting_link: ct.bookedMeetingLink })}</td>
     </tr>
   `).join('');
 }
 
 function openDetail(i) {
-  const c = calls[i];
-  document.getElementById('d-avatar-wrap').innerHTML = avatar(c.name, c.classification).replace('class="avatar"', 'class="avatar davatar"');
-  document.getElementById('d-name').textContent = c.name || 'Unknown caller';
-  document.getElementById('d-sub').textContent = [c.phone_number, c.classification].filter(Boolean).join(' · ');
-
-  const aiCost = c.cost_usd != null ? '$' + Number(c.cost_usd).toFixed(4) : '—';
-  const exotelCost = c.exotel_cost_inr != null ? '₹' + Number(c.exotel_cost_inr).toFixed(2) : '—';
-  const totalCostV = c.total_cost_inr != null ? '₹' + Number(c.total_cost_inr).toFixed(2) : '—';
-  const latency = c.avg_latency_s != null ? Number(c.avg_latency_s).toFixed(2) + 's' : '—';
-  const duration = durationLabel(c.lead_state?.call_metrics?.call_duration_s);
-  const turns = (c.transcript || []).length;
-
-  const priced = c.engine
-    ? `<p class="priced-against">Priced against <code>${esc(c.engine)}</code> / <code>${esc(c.model || '—')}</code></p>`
-    : '';
-
-  const recordingHtml = c.recording_url
-    ? `<audio controls src="${c.recording_url}"></audio>`
-    : `<p class="no-recording">No recording available for this call.</p>`;
-
-  const transcriptHtml = (c.transcript || []).length
-    ? `<div class="transcript">${c.transcript.map(m => `<div class="msg ${m.role}"><span class="role">${m.role}</span>${esc(m.content)}</div>`).join('')}</div>`
-    : `<p class="no-recording">No transcript captured.</p>`;
-
-  const u = c.usage || {};
-  const n = (v) => v ?? 0;
-  const totalInput = n(u.text_input) + n(u.audio_input);
-  const totalOutput = n(u.text_output) + n(u.audio_output);
-  const tokenUsageHtml = c.usage ? `
-    <div class="tiles">
-      <div class="tile">${icon('cpu', 'ticon')}<div class="tlabel">Total input tokens</div><div class="tval">${totalInput.toLocaleString()}</div></div>
-      <div class="tile">${icon('cpu', 'ticon')}<div class="tlabel">Total output tokens</div><div class="tval">${totalOutput.toLocaleString()}</div></div>
-    </div>
-    <table class="utable">
-      <thead><tr><th>Breakdown</th><th>Total</th><th>Cached</th></tr></thead>
-      <tbody>
-        <tr><td>Text input</td><td>${n(u.text_input).toLocaleString()}</td><td>${n(u.text_input_cached).toLocaleString()}</td></tr>
-        <tr><td>Audio input</td><td>${n(u.audio_input).toLocaleString()}</td><td>${n(u.audio_input_cached).toLocaleString()}</td></tr>
-        <tr><td>Text output</td><td>${n(u.text_output).toLocaleString()}</td><td>—</td></tr>
-        <tr><td>Audio output</td><td>${n(u.audio_output).toLocaleString()}</td><td>—</td></tr>
-        <tr class="total"><td>Total</td><td>${(totalInput + totalOutput).toLocaleString()}</td><td></td></tr>
-      </tbody>
-    </table>
-  ` : `<p class="no-recording">No token usage recorded for this call.</p>`;
-
-  document.getElementById('d-body').innerHTML = `
-    <div class="section">
-      <h3>${icon('phoneIn')}Call overview</h3>
-      <div class="tiles">
-        <div class="tile" style="--tile-accent: var(--cold)">${icon('clock', 'ticon')}<div class="tlabel">Duration</div><div class="tval">${duration}</div></div>
-        <div class="tile" style="--tile-accent: var(--good)">${icon('chat', 'ticon')}<div class="tlabel">Turns</div><div class="tval">${turns}</div></div>
-      </div>
-      <dl class="kv" style="margin-top:0.7rem">
-        <dt>${icon('globe')}Language</dt><dd>${fmt(c.preferred_language)}</dd>
-      </dl>
-    </div>
-    <div class="section">
-      <h3>${icon('building')}Caller</h3>
-      <dl class="kv">
-        <dt>Interest area</dt><dd>${fmt(c.interest_area)}</dd>
-        <dt>${icon('mail')}Email</dt><dd>${fmt(c.email_id)}</dd>
-      </dl>
-    </div>
-    <div class="section">
-      <h3>${icon('userCheck')}Qualification</h3>
-      <dl class="kv">
-        <dt>Budget</dt><dd>${fmt(c.budget)}</dd>
-        <dt>Timeline</dt><dd>${fmt(c.timeline)}</dd>
-        <dt>Decision maker</dt><dd>${fmt(c.decision_maker_status)}</dd>
-      </dl>
-    </div>
-    ${c.callback_time ? `
-    <div class="section">
-      <h3>${icon('phoneCallback')}Callback requested</h3>
-      <dl class="kv"><dt>Time</dt><dd>${esc(c.callback_time)}</dd></dl>
-    </div>` : ''}
-    <div class="section">
-      <h3>${icon('rupee')}Cost &amp; latency</h3>
-      ${priced}
-      <div class="tiles">
-        <div class="tile"><div class="tlabel">AI cost</div><div class="tval">${aiCost}</div><div class="tsub">Gemini / OpenAI tokens</div></div>
-        <div class="tile"><div class="tlabel">Telephony cost</div><div class="tval">${exotelCost}</div><div class="tsub">Exotel, per-minute</div></div>
-        <div class="tile"><div class="tlabel">Total cost</div><div class="tval">${totalCostV}</div><div class="tsub">Blended, INR</div></div>
-        <div class="tile"><div class="tlabel">Avg latency / turn</div><div class="tval">${latency}</div><div class="tsub">Time to first audio</div></div>
-      </div>
-    </div>
-    <div class="section">
-      <h3>${icon('cpu')}Token usage</h3>
-      ${tokenUsageHtml}
-    </div>
-    <div class="section">
-      <h3>${icon('mic')}Recording</h3>
-      ${recordingHtml}
-    </div>
-    <div class="section">
-      <h3>${icon('chat')}Transcript</h3>
-      ${transcriptHtml}
-    </div>
-  `;
-
-  document.getElementById('detail').classList.add('open');
-  document.getElementById('overlay').classList.add('open');
+  openContactDetail(contacts[i], DETAIL_OPTS);
 }
 
 function closeDetail() {
@@ -195,6 +128,7 @@ function closeDetail() {
 
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetail(); });
 
+initSidebar();
 load();
 setInterval(load, 15000);
 initModelPicker('inbound');

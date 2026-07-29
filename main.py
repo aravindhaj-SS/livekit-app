@@ -74,7 +74,10 @@ async def login_page():
 @app.post("/login")
 async def login_submit(username: str = Form(...), password: str = Form(...)):
     if username == settings.DASHBOARD_ADMIN_USERNAME and password == settings.DASHBOARD_ADMIN_PASSWORD:
-        resp = RedirectResponse(url="/dashboard", status_code=303)
+        # Master Dashboard is the landing page after login — /dashboard
+        # itself still means Outbound unchanged, only where login sends you
+        # is different.
+        resp = RedirectResponse(url="/dashboard/master", status_code=303)
         resp.set_cookie("dash_auth", dash_token(), httponly=True, samesite="lax")
         return resp
     return HTMLResponse("<p>Invalid credentials. <a href='/login'>Try again</a></p>", status_code=401)
@@ -99,3 +102,24 @@ async def dashboard_inbound_page(dash_auth: str | None = Cookie(default=None)):
     if not dash_token_valid(dash_auth):
         return RedirectResponse(url="/login")
     return FileResponse("static/dashboard_inbound.html")
+
+
+@app.get("/dashboard/master")
+async def dashboard_master_page(dash_auth: str | None = Cookie(default=None)):
+    if not dash_token_valid(dash_auth):
+        return RedirectResponse(url="/login")
+    return FileResponse("static/dashboard_master.html")
+
+
+@app.get("/dashboard/meetings")
+async def dashboard_meetings_page(dash_auth: str | None = Cookie(default=None)):
+    if not dash_token_valid(dash_auth):
+        return RedirectResponse(url="/login")
+    return FileResponse("static/dashboard_meetings.html")
+
+
+@app.get("/dashboard/leads")
+async def dashboard_leads_page(dash_auth: str | None = Cookie(default=None)):
+    if not dash_token_valid(dash_auth):
+        return RedirectResponse(url="/login")
+    return FileResponse("static/dashboard_leads.html")

@@ -41,6 +41,14 @@ _ADDED_COLUMNS = [
     # reschedule_discovery_call's .events().patch() instead of blindly
     # creating a duplicate booking.
     ("calendar_event_id", "TEXT"),
+    # Manual outcome tracking for booked meetings — NULL/unset means still
+    # pending, 'completed' or 'no_show' are set from the meetings page
+    # (see update_meeting_outcome). Nothing in this app can observe Calendar
+    # attendance automatically, so this is deliberately a human action, not
+    # an inferred one — feeds the master dashboard's completion rate and
+    # "cost per completed meeting" (a different, more honest question than
+    # "cost per meeting booked").
+    ("meeting_outcome", "TEXT"),
 ]
 
 
@@ -106,6 +114,14 @@ async def close_db():
     if _pool is not None:
         await _pool.close()
         _pool = None
+
+
+async def ping() -> None:
+    """Cheapest possible round trip against the real pool — used by
+    core/system_health.py's Postgres check. Raises on any failure (timeout,
+    connection refused, pool exhausted); the caller times/catches it."""
+    async with _pool.acquire() as conn:
+        await conn.fetchval("SELECT 1")
 
 
 async def save_lead(lead_data: dict) -> int:
@@ -229,6 +245,21 @@ async def update_call_summary(lead_id: int, summary: str) -> None:
     async with _pool.acquire() as conn:
         await conn.execute("UPDATE leads SET call_summary = $1 WHERE id = $2", summary, lead_id)
     logger.info(f"Lead {lead_id} call_summary saved")
+
+
+_MEETING_OUTCOMES = {"completed", "no_show", None}
+
+
+async def update_meeting_outcome(lead_id: int, outcome: Optional[str]) -> None:
+    """Manual mark-as-completed/no-show from the meetings page (api/routes.py's
+    POST /api/meetings/{lead_id}/outcome) — see the meeting_outcome column
+    comment in _ADDED_COLUMNS for why this can't be inferred automatically.
+    outcome=None resets a meeting back to pending."""
+    if outcome not in _MEETING_OUTCOMES:
+        raise ValueError(f"outcome must be one of {_MEETING_OUTCOMES!r}, got {outcome!r}")
+    async with _pool.acquire() as conn:
+        await conn.execute("UPDATE leads SET meeting_outcome = $1 WHERE id = $2", outcome, lead_id)
+    logger.info(f"Lead {lead_id} meeting_outcome set to {outcome!r}")
 
 
 async def get_previous_calls(

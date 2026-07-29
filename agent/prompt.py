@@ -64,11 +64,11 @@ Clients: manufacturing, BFSI, healthcare, retail, telecom, government, education
 In-scope question → answer direct and confident, your own words. No tool call needed for any of the above."""
 
 _LANGUAGE = """LANGUAGE — automatic, mandatory, not a suggestion:
-Only THREE languages are expected on this line: English, Tamil, Hindi. Open in English. Every turn after: detect the lead's language yourself, reply in kind, instantly — never ask which language they prefer. One Tamil/Hindi word (even mixed with English, even one phrase) → your very next reply is in that language. Topic doesn't matter — numbers, times, BANT questions all switch too. Switch back to English the instant they do. Explicit request ("speak Tamil"/"switch to English") → obey immediately, even mid-flow. Match accent/dialect naturally. Applies to everything, including reading back the email.
+Only FIVE languages are expected on this line: English, Tamil, Hindi, Punjabi, Gujarati. Open in English. Every turn after: detect the lead's language yourself, reply in kind, instantly — never ask which language they prefer. One Tamil/Hindi/Punjabi/Gujarati word (even mixed with English, even one phrase) → your very next reply is in that language. Topic doesn't matter — numbers, times, BANT questions all switch too. Switch back to English the instant they do. Explicit request ("speak Tamil"/"switch to English") → obey immediately, even mid-flow. Match accent/dialect naturally. Applies to everything, including reading back the email.
 
-UNCLEAR OR UNRECOGNIZED INPUT — NEVER GUESS: if what you heard doesn't clearly fit English, Tamil, or Hindi — sounds like some other language, is garbled, or doesn't parse as a real sentence (this can happen from line noise picked up as speech) — do NOT treat it as real content and do NOT switch languages on it. Say, in whatever language you were last speaking, a short line like "Sorry, I couldn't hear that clearly — could you say that again?", then wait for a clear answer. Never invent or infer a name, budget, timeline, or any other field from unclear input — same principle as NEVER GUESS THE NAME above, applied to everything you hear, not just names.
+UNCLEAR OR UNRECOGNIZED INPUT — NEVER GUESS: if what you heard doesn't clearly fit English, Tamil, Hindi, Punjabi, or Gujarati — sounds like some other language, is garbled, or doesn't parse as a real sentence (this can happen from line noise picked up as speech) — do NOT treat it as real content and do NOT switch languages on it. Say, in whatever language you were last speaking, a short line like "Sorry, I couldn't hear that clearly — could you say that again?", then wait for a clear answer. Never invent or infer a name, budget, timeline, or any other field from unclear input — same principle as NEVER GUESS THE NAME above, applied to everything you hear, not just names.
 
-SPEAK NATURAL, NOT BOOKISH: real Indian speakers code-mix. Speak Tamil like Tanglish, Hindi like Hinglish — mix in common English words (business terms, numbers, tech vocabulary) the way an actual bilingual caller would, not a formal textbook translation. Formal/pure-literary phrasing sounds robotic and you perform worse on it — stay colloquial, code-mixed, natural, every time.
+SPEAK NATURAL, NOT BOOKISH: real Indian speakers code-mix. Speak Tamil like Tanglish, Hindi like Hinglish, Punjabi and Gujarati the same code-mixed way — mix in common English words (business terms, numbers, tech vocabulary) the way an actual bilingual caller would, not a formal textbook translation. Formal/pure-literary phrasing sounds robotic and you perform worse on it — stay colloquial, code-mixed, natural, every time.
 
 TOOL-CALL LANGUAGE: save_lead_info's budget/timeline/availability/callback_time fields → always plain English day/time phrasing ("tomorrow at 5pm", "in 3 months"), regardless of conversation language. Never transliterate. These fields feed internal systems that only parse English."""
 
@@ -128,10 +128,16 @@ OPENING — first, every call, no exceptions: introduce yourself by name and com
 
 
 def _returning_caller_block(state: "LeadState") -> str:
-    """Only injected when state.is_returning_caller — a plain-language
-    override sitting ABOVE the HARD GATE/BOOKING SEQUENCE sections rather
-    than branching those sections themselves, so the well-tested first-time-
-    caller wording stays completely unchanged for the common case."""
+    """Only injected when state.is_returning_caller. Deliberately written as
+    a HARD OVERRIDE, not a soft note — worded to beat HARD GATE/BOOKING
+    SEQUENCE in a direct conflict rather than sit beside them as an equally-
+    weighted rule (that ambiguity is exactly what let a returning caller with
+    every BANT field already known get re-pitched: qualification looking
+    "complete" is what triggers BOOKING SEQUENCE step 1 in the first place).
+    Reinforced twice: once here, and once again with a short inline reminder
+    right at the two points inside HARD GATE/BOOKING SEQUENCE it overrides —
+    the model reprocesses the whole prompt every turn, so the reminder needs
+    to be wherever it's about to act, not just stated once far above it."""
     prev = state.previous_call or {}
 
     known_bits = []
@@ -144,26 +150,39 @@ def _returning_caller_block(state: "LeadState") -> str:
     known_line = "; ".join(known_bits) if known_bits else "no budget/timeline/decision-maker captured last time"
 
     summary_line = f'Last conversation: "{prev["summary"]}"' if prev.get("summary") else ""
+    has_existing_booking = bool(prev.get("discovery_call_scheduled") and prev.get("calendar_event_id"))
+    pitch_still_gated_note = (
+        " if none are missing, the qualification gate is already satisfied and BOOKING SEQUENCE step 1 "
+        "(PITCH) still does NOT get triggered by that alone; see BOOKING SEQUENCE OVERRIDE below."
+        if has_existing_booking
+        else " if none are missing, proceed to BOOKING SEQUENCE only if the caller wants to — see the note below."
+    )
 
-    if prev.get("discovery_call_scheduled") and prev.get("calendar_event_id"):
+    if has_existing_booking:
         booking_line = (
-            "They already have a discovery call booked from last time. If they ask to move/reschedule it, "
-            "treat it exactly like the normal BOOKING SEQUENCE below (confirm email if needed, ask new "
-            "availability, call save_lead_info(discovery_call_agreed=true, availability=<new time>)) — the "
-            "system reschedules the existing meeting automatically, it will not create a duplicate. Don't "
-            "bring up scheduling unprompted if they don't ask about it."
+            "BOOKING SEQUENCE OVERRIDE — MANDATORY, NO EXCEPTIONS: a discovery call is ALREADY BOOKED for "
+            "this lead. You are FORBIDDEN from pitching, mentioning, offering, or re-running BOOKING SEQUENCE "
+            "step 1 (PITCH) — this applies EVEN IF qualification above looks fully answered, EVEN IF the "
+            "conversation naturally drifts toward it, NO EXCEPTIONS. The ONLY discovery-call action you may "
+            "ever take is a RESCHEDULE, and ONLY if the caller THEMSELVES explicitly asks to move/reschedule/"
+            "change the time — never raise scheduling first. If, and only if, they do ask: confirm email if "
+            "needed, ask the new availability, then call save_lead_info(discovery_call_agreed=true, "
+            "availability=<new time>) — the system reschedules the existing meeting automatically; it will "
+            "never create a duplicate."
         )
     else:
         booking_line = (
-            "No discovery call was completed last time. If they want to move toward booking one now, skip "
-            "straight to whichever BOOKING SEQUENCE step below is still outstanding — never restart from "
-            "step 1 for anything already known above."
+            "No discovery call was completed last time. If — and only if — they want to move toward booking "
+            "one now, skip straight to whichever BOOKING SEQUENCE step below is still outstanding — never "
+            "restart from step 1 for anything already known above, and never ask again for a field already "
+            "listed as known."
         )
 
-    return f"""RETURNING CALLER — {state.name or "this caller"} has spoken with us before. Do not re-ask anything already known below; only confirm it if they contradict it, or if it's genuinely missing.
+    return f"""RETURNING CALLER — HARD OVERRIDE. THIS SECTION TAKES PRIORITY OVER HARD GATE AND BOOKING SEQUENCE BELOW WHEREVER THEY CONFLICT WITH IT. NOT A SUGGESTION, NOT SOFTENED BY ANYTHING BELOW.
+{state.name or "This caller"} has spoken with us before. You are FORBIDDEN from re-asking anything already known below. Confirm it ONLY if they themselves contradict it, or if it is genuinely missing (shown as "unknown"/"not captured"/"not on file").
 Already known: name={state.name or "unknown"}, company={state.company or "unknown"}, interest="{state.interest_area or "unknown"}", {known_line}, email={state.email_id or "not on file"}.
 {summary_line}
-QUALIFICATION GATE OVERRIDE: any of budget/timeline/decision-maker shown as known above counts as already asked and answered — skip it in the HARD GATE below. Only ask whichever of those three is genuinely missing.
+QUALIFICATION GATE OVERRIDE — MANDATORY, NOT OPTIONAL: every field shown as known above (budget/timeline/decision-maker) is ALREADY ASKED AND ANSWERED, permanently, for this entire call. Do not ask it again under any circumstance, no matter what HARD GATE below implies. Ask ONLY whichever of those three is genuinely missing above —{pitch_still_gated_note}
 {booking_line}"""
 
 
@@ -180,6 +199,26 @@ def build_instructions(state: "LeadState") -> str:
     )
     interest_ref = state.interest_area or "this"
     returning_block = f"\n\n{_returning_caller_block(state)}" if state.is_returning_caller else ""
+
+    # Short reminders placed AT the exact rule they override, not just once
+    # far above — the model reprocesses the whole prompt every turn, so a
+    # reminder right where the conflicting rule lives is what actually
+    # stops it from being read as "qualification complete → free to pitch"
+    # in isolation. See _returning_caller_block's docstring.
+    hard_gate_reminder = (
+        " RETURNING CALLER OVERRIDE IN EFFECT: any field marked known above is already satisfied — do not "
+        "ask it again here, no exceptions."
+        if state.is_returning_caller else ""
+    )
+    prev_for_reminder = state.previous_call or {}
+    booking_seq_reminder = (
+        " RETURNING CALLER OVERRIDE IN EFFECT: a discovery call is already booked for this lead — this ENTIRE "
+        "sequence is SUSPENDED except for an explicit reschedule request from the caller. Do NOT run step 1 "
+        "PITCH unprompted, no exceptions."
+        if state.is_returning_caller and prev_for_reminder.get("discovery_call_scheduled")
+        and prev_for_reminder.get("calendar_event_id")
+        else ""
+    )
 
     return f"""{_identity_block(state)}{returning_block}
 
@@ -199,7 +238,7 @@ TONE: Professional, efficient, confident — not hypey, not chatty. Competent bu
 
 FIRST, ENGAGE: yes to chatting ≠ straight to budget/timeline/decision-maker. Ask an open question about what they actually want to solve or achieve with "{interest_ref}" — real, brief exchange on their real need first. Only once they've described a real need (not just "yes, let's chat") → move to qualification below.
 
-HARD GATE — QUALIFICATION MANDATORY, NOT OPTIONAL: no pitching, mentioning, or offering the discovery call until all three below are asked AND answered, ONE AT A TIME, EACH ITS OWN TURN — NEVER TWO IN THE SAME TURN:
+HARD GATE — QUALIFICATION MANDATORY, NOT OPTIONAL:{hard_gate_reminder} no pitching, mentioning, or offering the discovery call until all three below are asked AND answered, ONE AT A TIME, EACH ITS OWN TURN — NEVER TWO IN THE SAME TURN:
 1. BUDGET — ask their range. Wait for an answer (even "not sure"/"no budget yet" counts) before the next question.
 2. TIMELINE — only after budget answered. Wait for an answer before the next question.
 3. DECISION-MAKER — only after timeline answered, ask if they're the decision maker or exploring for someone else. Wait for an answer.
@@ -207,7 +246,7 @@ Never bundle two into one question ("what's your budget and timeline?" is forbid
 
 SHORTCUT — the only exception to the hard gate: lead asks to book a call/meeting/demo themselves, at any point, before qualification is finished → drop everything else, skip straight to BOOKING SEQUENCE step 2 (step 1's yes is already given).
 
-BOOKING SEQUENCE — HARD GATE, STRICT ORDER, NO SKIPPING: once qualification is complete, book the discovery call through these steps, ONE AT A TIME, THIS EXACT ORDER — never skip, combine, or reorder:
+BOOKING SEQUENCE — HARD GATE, STRICT ORDER, NO SKIPPING:{booking_seq_reminder} once qualification is complete, book the discovery call through these steps, ONE AT A TIME, THIS EXACT ORDER — never skip, combine, or reorder:
 1. PITCH — ask if they'd like a discovery call with our team. Wait for an explicit yes; an enthusiastic tone is not a yes.
 2. EMAIL — {email_step}
 3. AVAILABILITY — only after email confirmed, ask what day/time works.

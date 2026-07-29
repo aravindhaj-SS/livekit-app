@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mira — Master Dashboard</title>
+<link rel="stylesheet" href="/static/dashboard-light.css?v=6">
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-top">
+      <div class="brand">
+        <span class="mark">M</span>
+        <div class="brand-text">
+          <h1>Mira</h1>
+          <div class="tagline">Swaran Soft</div>
+        </div>
+      </div>
+      <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle sidebar"></button>
+    </div>
+    <nav class="side-nav">
+      <a href="/dashboard/master" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18M8 17V10M13 17V6M18 17v-4"/></svg><span class="nav-label">Master Dashboard</span></a>
+      <a href="/dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 8a4 4 0 0 1 4 4M15 4a8 8 0 0 1 8 8M22 16.9v2.6a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 3.8 2 2 0 0 1 4.1 1.6h2.6a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L7.6 9.6a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2Z"/></svg><span class="nav-label">Outbound</span></a>
+      <a href="/dashboard/inbound"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v2.6a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 3.8 2 2 0 0 1 4.1 1.6h2.6a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L7.6 9.6a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2Z"/><path d="M14 4h6v6M20 4l-7 7"/></svg><span class="nav-label">Inbound</span></a>
+      <a href="/dashboard/meetings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M9 16l2 2 4-4"/></svg><span class="nav-label">Meetings</span></a>
+      <a href="/dashboard/leads"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg><span class="nav-label">Leads</span></a>
+    </nav>
+    <a href="/logout" class="logout-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg><span class="nav-label">Log out</span></a>
+  </aside>
+
+  <div class="main-area">
+    <div class="page-topbar">
+      <div>
+        <h2>Master Dashboard</h2>
+        <p>Every call, one view</p>
+      </div>
+      <div class="date-filter-bar">
+        <label for="filter-from">From</label>
+        <input type="date" id="filter-from">
+        <label for="filter-to">To</label>
+        <input type="date" id="filter-to">
+        <button class="primary" onclick="applyDateFilter()">Apply</button>
+        <button onclick="resetDateFilter()">Reset</button>
+        <span class="date-filter-note" id="date-filter-note"></span>
+      </div>
+    </div>
+    <div id="wrap">
+      <div id="content"></div>
+      <div class="empty-page" id="empty" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/dashboard-common.js?v=7"></script>
+<script>
+initSidebar();
+// ── Hand-rolled SVG charts — framework-free, matching this app's existing
+// no-build-step convention (see dashboard-common.js's renderTrendCard). Color
+// values reference dashboard-light.css's CSS custom properties, which are the
+// dataviz skill's own validated default palette used unmodified.
+
+function fmtInr(v) { return v == null ? '—' : '₹' + Number(v).toFixed(2); }
+function fmtSec(v) { return v == null ? '—' : Number(v).toFixed(2) + 's'; }
+
+// statTile() now lives in dashboard-common.js (shared with the KPI strip on
+// the other three dashboards) — no local copy here anymore.
+
+/** Few (2-4) named categories, each value direct-labeled — the job is
+ * "compare magnitude, tell distinct series apart" (dataviz skill,
+ * choosing-a-form.md), so labels are mandatory, not selective. */
+function renderCategoryBarChart(items, opts) {
+  opts = opts || {};
+  const w = 320, h = 160, gap = 24, labelH = 26;
+  const chartH = h - labelH;
+  const maxVal = Math.max(1, ...items.map(i => Number(i.value) || 0));
+  const n = items.length;
+  const barW = (w - gap * (n + 1)) / n;
+  const bars = items.map((item, i) => {
+    const x = gap + i * (barW + gap);
+    const val = Number(item.value) || 0;
+    const barH = maxVal > 0 ? (val / maxVal) * (chartH - 34) : 0;
+    const y = chartH - barH;
+    const label = opts.formatValue ? opts.formatValue(val) : val;
+    return `
+      <g>
+        <rect class="bar" x="${x}" y="${y}" width="${barW}" height="${Math.max(barH, 1)}" fill="${item.color}"><title>${esc(item.label)}: ${label}</title></rect>
+        <text class="bar-value" x="${x + barW / 2}" y="${y - 8}" text-anchor="middle">${label}</text>
+        <text class="bar-cat-label" x="${x + barW / 2}" y="${chartH + 18}" text-anchor="middle">${esc(item.label)}</text>
+      </g>
+    `;
+  }).join('');
+  return `<svg class="bars-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">
+    <line class="bar-axis" x1="0" y1="${chartH}" x2="${w}" y2="${chartH}"></line>
+    ${bars}
+  </svg>`;
+}
+
+/** Many ordered categories (hours of day, dates) — one series, magnitude is
+ * the whole job, so bar length alone carries it (never color-by-value —
+ * see dataviz skill's color-formula.md). Sparse axis labels + tooltip
+ * instead of a printed value per bar, to avoid label clutter at this
+ * density. */
+function renderSequenceBarChart(items, opts) {
+  opts = opts || {};
+  const w = Math.max(560, items.length * 26);
+  const h = 140, gap = 4, labelH = 22, leftPad = 6;
+  const chartH = h - labelH;
+  const maxVal = Math.max(1, ...items.map(i => Number(i.value) || 0));
+  const n = items.length;
+  const barW = (w - leftPad * 2 - gap * (n - 1)) / n;
+  const labelEvery = opts.labelEvery || 1;
+  const bars = items.map((item, i) => {
+    const x = leftPad + i * (barW + gap);
+    const val = Number(item.value) || 0;
+    const barH = maxVal > 0 ? (val / maxVal) * (chartH - 8) : 0;
+    const y = chartH - barH;
+    const showLabel = i % labelEvery === 0;
+    return `
+      <g>
+        <rect class="bar" x="${x}" y="${y}" width="${barW}" height="${Math.max(barH, val > 0 ? 2 : 0)}" fill="${opts.color}"><title>${esc(item.label)}: ${val}</title></rect>
+        ${showLabel ? `<text class="bar-cat-label" x="${x + barW / 2}" y="${chartH + 16}" text-anchor="middle">${esc(item.label)}</text>` : ''}
+      </g>
+    `;
+  }).join('');
+  return `<div class="chart-scroll"><svg class="bars-svg" viewBox="0 0 ${w} ${h}" style="min-width:${w}px">
+    <line class="bar-axis" x1="0" y1="${chartH}" x2="${w}" y2="${chartH}"></line>
+    ${bars}
+  </svg></div>`;
+}
+
+function renderDonutChart(slices) {
+  const size = 140, strokeW = 13, r = size / 2 - strokeW;
+  const cx = size / 2, cy = size / 2;
+  const circumference = 2 * Math.PI * r;
+  const total = slices.reduce((s, x) => s + (x.value || 0), 0);
+  let offset = 0;
+  const segs = slices.filter(s => s.value > 0).map(s => {
+    const frac = total > 0 ? s.value / total : 0;
+    const dash = frac * circumference;
+    const seg = `<circle class="donut-seg" cx="${cx}" cy="${cy}" r="${r}" stroke="${s.color}" stroke-dasharray="${dash} ${circumference - dash}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"><title>${esc(s.label)}: ${s.value}</title></circle>`;
+    offset += dash;
+    return seg;
+  }).join('');
+  const svg = `<svg class="donut-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--gridline)" stroke-width="${strokeW}"></circle>
+    ${segs}
+    <text class="donut-center-label donut-center-value" x="${cx}" y="${cy - 2}" text-anchor="middle">${total}</text>
+    <text class="donut-center-label donut-center-sub" x="${cx}" y="${cy + 16}" text-anchor="middle">leads</text>
+  </svg>`;
+  const legend = `<div class="donut-legend">${slices.map(s => `
+    <div class="lrow"><span class="ldot" style="background:${s.color}"></span><span class="lname">${esc(s.label)}</span><span class="lval">${s.value}</span></div>
+  `).join('')}</div>`;
+  return `<div class="donut-wrap">${svg}${legend}</div>`;
+}
+
+/** Trend over time — 1 or more series, each a line + direct-labeled points
+ * (only ≤4 series ever expected here: call volume in/out, or a single cost
+ * line), with a legend whenever there's more than one series. */
+function renderLineChart(series, labels, opts) {
+  opts = opts || {};
+  const w = 600, h = 110, padBottom = 20, padTop = 8;
+  const chartH = h - padBottom;
+  const n = labels.length;
+  const maxVal = Math.max(1, ...series.flatMap(s => s.values));
+  const step = n > 1 ? (w - 12) / (n - 1) : 0;
+  const yFor = v => padTop + (chartH - padTop) - (v / maxVal) * (chartH - padTop);
+
+  const lines = series.map(s => {
+    const pts = s.values.map((v, i) => `${(6 + i * step).toFixed(1)},${yFor(v).toFixed(1)}`).join(' ');
+    const dots = s.values.map((v, i) => `<circle cx="${(6 + i * step).toFixed(1)}" cy="${yFor(v).toFixed(1)}" r="2.8" fill="${s.color}"><title>${esc(s.label)} — ${labels[i]}: ${v}</title></circle>`).join('');
+    return `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></polyline>${dots}`;
+  }).join('');
+
+  const labelEvery = opts.labelEvery || 1;
+  const xLabels = labels.map((l, i) => i % labelEvery === 0
+    ? `<text class="bar-cat-label" x="${(6 + i * step).toFixed(1)}" y="${h - 4}" text-anchor="middle">${esc(l)}</text>` : ''
+  ).join('');
+
+  const legend = series.length > 1 ? `<div class="legend">${series.map(s => `
+    <span class="lswatch"><span class="ldot" style="background:${s.color}"></span>${esc(s.label)}</span>
+  `).join('')}</div>` : '';
+
+  return `<svg class="bars-svg" viewBox="0 0 ${w} ${h}">
+    <line class="bar-axis" x1="0" y1="${chartH}" x2="${w}" y2="${chartH}"></line>
+    ${lines}
+    ${xLabels}
+  </svg>${legend}`;
+}
+
+/** Gradient-filled area chart — today-scoped hourly series (Calls by Hour /
+ * Cost Trend), matching the reference mockup's look. Single series only
+ * (each of these two charts is one metric, one line — no legend needed). */
+let _areaChartSeq = 0;
+function renderAreaChart(values, labels, opts) {
+  opts = opts || {};
+  const w = 600, h = 110, padBottom = 20, padTop = 8;
+  const chartH = h - padBottom;
+  const n = values.length;
+  const maxVal = Math.max(1, ...values);
+  const step = n > 1 ? w / (n - 1) : 0;
+  const color = opts.color || 'var(--brand)';
+  const yFor = v => padTop + (chartH - padTop) - (v / maxVal) * (chartH - padTop);
+  const points = values.map((v, i) => `${(i * step).toFixed(1)},${yFor(v).toFixed(1)}`).join(' ');
+  const area = `0,${chartH} ${points} ${w},${chartH}`;
+  const gradId = `areaGrad${_areaChartSeq++}`;
+  const dots = values.map((v, i) => `<circle cx="${(i * step).toFixed(1)}" cy="${yFor(v).toFixed(1)}" r="2.3" fill="${color}"><title>${esc(labels[i])}: ${opts.formatValue ? opts.formatValue(v) : v}</title></circle>`).join('');
+  const labelEvery = opts.labelEvery || 1;
+  const xLabels = labels.map((l, i) => i % labelEvery === 0
+    ? `<text class="bar-cat-label" x="${(i * step).toFixed(1)}" y="${h - 4}" text-anchor="middle">${esc(l)}</text>` : ''
+  ).join('');
+  return `<svg class="bars-svg" viewBox="0 0 ${w} ${h}">
+    <defs><linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${color}" stop-opacity="0.28"></stop>
+      <stop offset="100%" stop-color="${color}" stop-opacity="0.02"></stop>
+    </linearGradient></defs>
+    <line class="bar-axis" x1="0" y1="${chartH}" x2="${w}" y2="${chartH}"></line>
+    <polygon points="${area}" fill="url(#${gradId})"></polygon>
+    <polyline points="${points}" fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+    ${dots}
+    ${xLabels}
+  </svg>`;
+}
+
+/** Small inline sparkline for a hero stat card — normalized to its own
+ * min/max (unlike the big charts above) since the point here is just
+ * "shape of the trend", not a readable axis. */
+function sparkline(values, color) {
+  const w = 100, h = 30;
+  const max = Math.max(...values), min = Math.min(...values);
+  const range = (max - min) || 1;
+  const step = values.length > 1 ? w / (values.length - 1) : 0;
+  const points = values.map((v, i) => `${(i * step).toFixed(1)},${(h - ((v - min) / range) * h).toFixed(1)}`).join(' ');
+  const area = `0,${h} ${points} ${w},${h}`;
+  return `<svg class="sc-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <polygon points="${area}" fill="${color}" opacity="0.15"></polygon>
+    <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></polyline>
+  </svg>`;
+}
+
+/** Up/down delta badge for a hero stat card — colors by direction only
+ * (up=green, down=red), same convention the reference mockup itself used
+ * across all four of its top cards, cost included. null (no prior-day
+ * figure to compare against, e.g. yesterday was zero) reads as a flat dash
+ * rather than a fake "0%" or a divide-by-zero. */
+function deltaBadge(pct, sub) {
+  if (pct == null) return `<span class="sc-delta flat">—<span class="sc-delta-sub">${sub || 'vs yesterday'}</span></span>`;
+  const up = pct >= 0;
+  return `<span class="sc-delta ${up ? 'up' : 'down'}">${up ? '↑' : '↓'}${Math.abs(pct).toFixed(1)}%<span class="sc-delta-sub">${sub || 'vs yesterday'}</span></span>`;
+}
+
+function renderModelTable(rows) {
+  if (!rows.length) return '<div class="chart-empty">No model usage recorded yet.</div>';
+  return `<div class="chart-scroll"><table class="mtable">
+    <thead><tr><th>Provider</th><th>Model</th><th>Calls</th><th>Avg cost / call</th><th>Avg latency</th></tr></thead>
+    <tbody>${rows.map(r => `
+      <tr>
+        <td>${esc(r.engine)}</td><td>${esc(r.model)}</td><td class="mono">${r.calls}</td>
+        <td class="mono">${fmtInr(r.avg_cost_per_call_inr)}</td><td class="mono">${fmtSec(r.avg_latency_s)}</td>
+      </tr>
+    `).join('')}</tbody>
+  </table></div>`;
+}
+
+function renderCallbacksTable(rows) {
+  if (!rows.length) return '<div class="chart-empty">No pending callbacks.</div>';
+  return `<table class="mtable">
+    <thead><tr><th>Name</th><th>Phone</th><th>Direction</th><th>Requested time</th></tr></thead>
+    <tbody>${rows.map(r => {
+      const when = r.callback_time ? new Date(r.callback_time) : null;
+      return `
+      <tr>
+        <td>${esc(r.name) || '—'}</td>
+        <td class="mono">${esc(r.phone_number) || '—'}</td>
+        <td>${r.direction === 'inbound' ? 'Inbound' : 'Outbound'}</td>
+        <td class="mono">${when && !isNaN(when) ? when.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table>`;
+}
+
+function renderRecentCallsTable(calls) {
+  const recent = calls.slice(0, 6);
+  if (!recent.length) return '<div class="panel-empty">No calls yet.</div>';
+  // chart-scroll (overflow-x:auto) — same fix as renderModelTable's mtable
+  // below: this card sits in a 3-up .chart-row (Recent Calls / Leads /
+  // System Health), so at some viewport widths (confirmed at 100% browser
+  // zoom on a standard laptop width) the card gets squeezed below what this
+  // 5-column table needs, and .chart-card's own overflow:hidden was silently
+  // clipping the rightmost column — Cost — right off the edge instead of
+  // wrapping or scrolling to it.
+  return `<div class="chart-scroll"><table class="recent-table">
+    <thead><tr><th>Customer</th><th>Phone</th><th>Duration</th><th>Status</th><th>Cost</th></tr></thead>
+    <tbody>${recent.map(c => {
+      const durationS = c.lead_state && c.lead_state.call_metrics ? c.lead_state.call_metrics.call_duration_s : null;
+      const statusHtml = c.discovery_call_scheduled
+        ? '<span class="rc-status booked">Booked</span>'
+        : '<span class="rc-status pending">—</span>';
+      return `
+      <tr>
+        <td class="rc-name">${avatar(c.name, c.classification).replace('class="avatar"', 'class="rc-avatar"')}${esc(c.name) || 'Unknown'}</td>
+        <td class="mono">${esc(c.phone_number) || '—'}</td>
+        <td class="mono">${durationLabel(durationS)}</td>
+        <td>${statusHtml}</td>
+        <td class="mono">${fmtInr(c.total_cost_inr)}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div>`;
+}
+
+// ── Leads panel — one row per distinct contact (see groupCallsByContact),
+// filterable by Hot/Warm/Cold. State lives at module scope so the filter
+// buttons can re-render just this panel without re-fetching or re-running
+// the whole page's load(). ─────────────────────────────────────────────────
+let _leadsContacts = [];
+let _leadsFilter = 'all';
+
+function renderLeadsPanel(contacts, filter) {
+  // bestClassification (see groupCallsByContact) — a lead qualified Hot on
+  // one call must still show Hot here even if a later, shorter call only
+  // reached Warm; the same goes for displayName if a repeat call didn't
+  // repeat it.
+  const filtered = filter === 'all' ? contacts : contacts.filter(c => c.bestClassification === filter);
+  const filterBtns = ['all', 'Hot', 'Warm', 'Cold'].map(f => `
+    <button class="${f === filter ? 'active' : ''}" onclick="setLeadsFilter('${f}')">${f === 'all' ? 'All' : f}</button>
+  `).join('');
+  const rows = filtered.length
+    ? filtered.map(c => `
+      <div class="lead-row">
+        ${avatar(c.displayName, c.bestClassification)}
+        <span class="lead-name">${esc(c.displayName) || 'Unknown'}</span>
+        ${classificationTag(c.bestClassification)}
+      </div>
+    `).join('')
+    : '<div class="panel-empty">No leads match this filter.</div>';
+  return `<div class="leads-filter">${filterBtns}</div><div class="leads-list">${rows}</div>`;
+}
+
+function setLeadsFilter(filter) {
+  _leadsFilter = filter;
+  const body = document.getElementById('leads-panel-body');
+  if (body) body.innerHTML = renderLeadsPanel(_leadsContacts, _leadsFilter);
+}
+
+/** Call outcomes as a vertical stack of small rows (icon + label + count +
+ * %), matching the Recent Calls/System Health/Leads list style — replaces
+ * the earlier donut, which was stranded alone in a full-width row with
+ * nothing to sit beside it. */
+function renderOutcomeCards(co) {
+  const items = [
+    { label: 'Meeting booked', value: co.meeting_booked, iconName: 'calendarCheck', bg: 'var(--icon-teal-bg)', fg: 'var(--icon-teal-fg)' },
+    { label: 'Callback requested', value: co.callback_requested, iconName: 'phoneCallback', bg: 'var(--icon-blue-bg)', fg: 'var(--icon-blue-fg)' },
+    { label: 'Out of scope', value: co.out_of_scope, iconName: 'target', bg: 'var(--icon-orange-bg)', fg: 'var(--icon-orange-fg)' },
+    { label: 'No clear outcome', value: co.no_outcome, iconName: 'chat', bg: 'var(--icon-violet-bg)', fg: 'var(--icon-violet-fg)' },
+  ];
+  const total = items.reduce((s, i) => s + i.value, 0);
+  if (!total) return '<div class="panel-empty">No calls recorded yet.</div>';
+  return `<div class="outcome-cards">${items.map(i => `
+    <div class="outcome-card-row">
+      <span class="outcome-card-icon" style="background:${i.bg}; color:${i.fg}">${icon(i.iconName)}</span>
+      <span class="outcome-card-label">${esc(i.label)}</span>
+      <span class="outcome-card-value">${i.value.toLocaleString()}<span class="outcome-card-pct">${Math.round(i.value / total * 100)}%</span></span>
+    </div>
+  `).join('')}</div>`;
+}
+
+const HEALTH_ICON = { 'Postgres': 'cpu', 'RAG service': 'search', 'Google Calendar': 'calendarClock', 'OpenAI API': 'cpu' };
+
+function renderHealthPanel(rows) {
+  if (!rows.length) return '<div class="panel-empty">No health data available.</div>';
+  return `<div class="panel-list">${rows.map(r => `
+    <div class="health-row">
+      <span class="health-dot ${r.status}"></span>
+      <span class="health-name">${esc(r.name)}</span>
+      <span class="health-status ${r.status}">${r.status === 'operational' ? 'Operational' : 'Down'}</span>
+      <span class="health-latency">${r.latency_ms != null ? r.latency_ms + ' ms' : '—'}</span>
+    </div>
+  `).join('')}</div>`;
+}
+
+const INSIGHT_ICONS = ['barChart', 'calendarCheck', 'clock', 'target'];
+
+function renderInsightsPanel(insights) {
+  if (!insights || !insights.length) return '<div class="panel-empty">No insights available yet — check back after a few more calls.</div>';
+  return `<div class="panel-list">${insights.map((text, i) => `
+    <div class="insight-row">
+      <span class="insight-icon">${icon(INSIGHT_ICONS[i % INSIGHT_ICONS.length])}</span>
+      <span class="insight-text">${esc(text)}</span>
+    </div>
+  `).join('')}</div>`;
+}
+
+const HOUR_LABELS = Array.from({ length: 24 }, (_, h) => {
+  const period = h < 12 ? 'a' : 'p';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}${period}`;
+});
+
+function chartCard(iconName, title, sub, bodyHtml) {
+  return `<div class="chart-card">
+    <h4>${icon(iconName)}${esc(title)}</h4>
+    <p class="chart-sub">${esc(sub || '')}</p>
+    ${bodyHtml}
+  </div>`;
+}
+
+async function refreshLiveCalls() {
+  try {
+    const res = await fetch('/api/live-calls');
+    if (res.status === 401) { window.location = '/login'; return; }
+    const d = await res.json();
+    const liveEl = document.getElementById('live-calls-value');
+    const concEl = document.getElementById('concurrent-calls-value');
+    const concSubEl = document.getElementById('concurrent-calls-sub');
+    if (liveEl) liveEl.textContent = d.active.toLocaleString();
+    if (concEl) concEl.textContent = d.peak_today.toLocaleString();
+    if (concSubEl) concSubEl.textContent = `Maximum today: ${d.peak_today.toLocaleString()}`;
+  } catch (e) { /* transient — next tick retries */ }
+}
+
+// ── Date-range filter — Overview/Trends/etc. below all come straight from
+// /api/dashboard/stats, which now accepts from/to (see api/routes.py) and
+// recomputes every figure over just that window, letting one campaign
+// window be compared against another. Recent Calls/Leads/System Health stay
+// unfiltered (they're /api/calls-fed "what's the pipeline look like right
+// now" widgets, not historical comparison), and Today/Live stay real-time —
+// only the aggregate sections this filter is actually for move. ──────────
+let dateFrom = null, dateTo = null;
+
+function _statsUrl() {
+  const params = new URLSearchParams();
+  if (dateFrom) params.set('from', dateFrom);
+  if (dateTo) params.set('to', dateTo);
+  const qs = params.toString();
+  return '/api/dashboard/stats' + (qs ? '?' + qs : '');
+}
+
+function _updateDateFilterNote() {
+  const note = document.getElementById('date-filter-note');
+  if (!note) return;
+  note.textContent = (dateFrom || dateTo) ? `Filtered: ${dateFrom || 'earliest'} → ${dateTo || 'latest'}` : '';
+}
+
+function applyDateFilter() {
+  dateFrom = document.getElementById('filter-from').value || null;
+  dateTo = document.getElementById('filter-to').value || null;
+  _updateDateFilterNote();
+  load();
+}
+
+function resetDateFilter() {
+  document.getElementById('filter-from').value = '';
+  document.getElementById('filter-to').value = '';
+  dateFrom = null;
+  dateTo = null;
+  _updateDateFilterNote();
+  load();
+}
+
+async function load() {
+  const [statsRes, callsRes] = await Promise.all([fetch(_statsUrl()), fetch('/api/calls')]);
+  if (statsRes.status === 401 || callsRes.status === 401) { window.location = '/login'; return; }
+  const s = await statsRes.json();
+  const allCalls = await callsRes.json();
+
+  if (!s.totals.calls_total) {
+    document.getElementById('empty').style.display = 'block';
+    document.getElementById('empty').innerHTML = `${ICON.inbox}<div>No calls recorded yet.</div>`;
+    return;
+  }
+
+  const t = s.totals, apc = s.avg_cost_per_call_inr, apm = s.avg_cost_per_min_inr, mb = s.meetings_booked, lat = s.avg_latency_s;
+  const cls = s.classification_counts;
+  const rc = s.returning_caller, mo = s.meeting_outcomes, co = s.call_outcomes;
+  const hd = s.headline_deltas, th = s.today_hourly;
+
+  // ── Hero: Today's headline numbers, each with a 14-day sparkline ────────
+  const callsSpark = s.daily_trend.map(d => d.calls_inbound + d.calls_outbound);
+  const minutesSpark = s.daily_trend.map(d => d.total_minutes);
+  const avgDurSpark = s.daily_trend.map(d => (d.calls_inbound + d.calls_outbound) ? d.total_minutes / (d.calls_inbound + d.calls_outbound) : 0);
+  const costSpark = s.daily_trend.map(d => d.total_cost_inr);
+
+  const heroToday = `
+    <div class="hero-grid">
+      <div class="stat-card-v2">
+        <div class="sc-top"><div class="sc-icon" style="--sc-bg:var(--icon-blue-bg);--sc-fg:var(--icon-blue-fg)">${icon('phoneOut')}</div></div>
+        <div class="sc-label">Today's Calls</div>
+        <div class="sc-value">${hd.calls_today.toLocaleString()}</div>
+        ${deltaBadge(hd.calls_delta_pct)}
+        ${sparkline(callsSpark, 'var(--icon-blue-fg)')}
+      </div>
+      <div class="stat-card-v2">
+        <div class="sc-top"><div class="sc-icon" style="--sc-bg:var(--icon-teal-bg);--sc-fg:var(--icon-teal-fg)">${icon('clock')}</div></div>
+        <div class="sc-label">Minutes Today</div>
+        <div class="sc-value">${hd.minutes_today.toLocaleString()}<span style="font-size:0.85rem;font-weight:600;color:var(--ink-muted)"> mins</span></div>
+        ${deltaBadge(hd.minutes_delta_pct)}
+        ${sparkline(minutesSpark, 'var(--icon-teal-fg)')}
+      </div>
+      <div class="stat-card-v2">
+        <div class="sc-top"><div class="sc-icon" style="--sc-bg:var(--icon-green-bg);--sc-fg:var(--icon-green-fg)">${icon('mic')}</div></div>
+        <div class="sc-label">Avg. Call Duration</div>
+        <div class="sc-value">${hd.avg_duration_min_today.toFixed(2)}<span style="font-size:0.85rem;font-weight:600;color:var(--ink-muted)"> min</span></div>
+        ${deltaBadge(hd.avg_duration_delta_pct)}
+        ${sparkline(avgDurSpark, 'var(--icon-green-fg)')}
+      </div>
+      <div class="stat-card-v2">
+        <div class="sc-top"><div class="sc-icon" style="--sc-bg:var(--icon-orange-bg);--sc-fg:var(--icon-orange-fg)">${icon('rupee')}</div></div>
+        <div class="sc-label">Cost Today</div>
+        <div class="sc-value">${fmtInr(hd.cost_today_inr)}</div>
+        ${deltaBadge(hd.cost_delta_pct)}
+        ${sparkline(costSpark, 'var(--icon-orange-fg)')}
+      </div>
+    </div>
+  `;
+
+  // ── Hero: live / concurrency / response / conversion ────────────────────
+  const heroLive = `
+    <div class="hero-grid">
+      <div class="stat-card-v2">
+        <div class="sc-top"><div class="sc-icon" style="--sc-bg:var(--icon-green-bg);--sc-fg:var(--icon-green-fg)">${icon('phoneOut')}</div></div>
+        <div class="sc-label">Live Calls</div>
+        <div class="sc-value" id="live-calls-value">—</div>
+        <div class="sc-sub"><span class="live-dot"></span> Active right now</div>
+      </div>
+      <div class="stat-card-v2">
+        <div class="sc-top"><div class="sc-icon" style="--sc-bg:var(--icon-violet-bg);--sc-fg:var(--icon-violet-fg)">${icon('userCheck')}</div></div>
+        <div class="sc-label">Concurrent Calls</div>
+        <div class="sc-value" id="concurrent-calls-value">—</div>
+        <div class="sc-sub" id="concurrent-calls-sub">Maximum today: —</div>
+      </div>
+      <div class="stat-card-v2">
+        <div class="sc-top"><div class="sc-icon" style="--sc-bg:var(--icon-blue-bg);--sc-fg:var(--icon-blue-fg)">${icon('clock')}</div></div>
+        <div class="sc-label">Response Time (Avg.)</div>
+        <div class="sc-value">${lat.model != null ? Math.round(lat.model * 1000).toLocaleString() : '—'}<span style="font-size:0.85rem;font-weight:600;color:var(--ink-muted)"> ms</span></div>
+        <div class="sc-sub">Time to first audio</div>
+      </div>
+      <div class="stat-card-v2">
+        <div class="sc-top"><div class="sc-icon" style="--sc-bg:var(--icon-teal-bg);--sc-fg:var(--icon-teal-fg)">${icon('target')}</div></div>
+        <div class="sc-label">Meeting Conversion</div>
+        <div class="sc-value">${s.meeting_conversion_rate != null ? (s.meeting_conversion_rate * 100).toFixed(1) + '%' : '—'}</div>
+        <div class="sc-sub">of all calls booked a meeting</div>
+      </div>
+    </div>
+  `;
+
+  // ── Hero: today's hourly area charts ────────────────────────────────────
+  const heroAreaCharts = `
+    <div class="chart-row">
+      ${chartCard('barChart', 'Calls by Hour', 'today, by hour (IST)',
+        th.calls.every(h => h.count === 0)
+          ? '<div class="chart-empty">No calls yet today.</div>'
+          : renderAreaChart(th.calls.map(h => h.count), th.calls.map(h => HOUR_LABELS[h.hour]), { color: 'var(--c-violet)', labelEvery: 3 }))}
+      ${chartCard('rupee', 'Cost Trend', 'today, ₹ by hour',
+        th.cost_inr.every(h => h.value === 0)
+          ? '<div class="chart-empty">No cost recorded yet today.</div>'
+          : renderAreaChart(th.cost_inr.map(h => h.value), th.cost_inr.map(h => HOUR_LABELS[h.hour]), { color: 'var(--c-aqua)', labelEvery: 3, formatValue: v => fmtInr(v) }))}
+    </div>
+  `;
+
+  const languageHtml = chartCard(
+    'globe', 'Calls by Language', 'preferred language, all calls',
+    s.language_breakdown.length === 0
+      ? '<div class="chart-empty">No language data recorded yet.</div>'
+      : renderDonutChart(s.language_breakdown.map((l, i) => ({
+          label: l.language, value: l.count,
+          color: ['var(--c-blue)', 'var(--c-orange)', 'var(--c-aqua)', 'var(--c-violet)'][i % 4],
+        })))
+  );
+
+  const callOutcomesHtml = chartCard(
+    'target', 'Call Outcomes', 'every call, mutually exclusive (counts calls, not distinct meetings — see Overview for that)',
+    renderOutcomeCards(co)
+  );
+
+  const aiInsightsHtml = chartCard('barChart', 'AI Insights', "auto-generated from today's numbers (gpt-4o-mini)", renderInsightsPanel(s.ai_insights));
+
+  _leadsContacts = groupCallsByContact(allCalls);
+  const leadsHtml = chartCard('userCheck', 'Leads', 'every contact, filter by temperature', `<div id="leads-panel-body">${renderLeadsPanel(_leadsContacts, _leadsFilter)}</div>`);
+
+  const heroActivity = `
+    <div class="chart-row">
+      ${chartCard('chat', 'Recent Calls', 'newest first', renderRecentCallsTable(allCalls))}
+      ${leadsHtml}
+      ${chartCard('cpu', 'System Health', 'live reachability checks, refreshed periodically', renderHealthPanel(s.system_health))}
+    </div>
+  `;
+
+  // ── Everything below here is unchanged from before this redesign ───────
+
+  const totalsHtml = `
+    <div class="stat-grid">
+      ${statTile('phoneOut', '--brand', 'Total calls', t.calls_total.toLocaleString(), `${t.calls_inbound.toLocaleString()} in · ${t.calls_outbound.toLocaleString()} out`)}
+      ${statTile('calendarCheck', '--out', 'Meetings booked', t.meetings_booked_total.toLocaleString(), 'distinct meetings, reschedules not double-counted')}
+      ${statTile('wallet', '--brand', 'Total AI cost', fmtInr(t.ai_cost_inr_total), 'token cost, all calls')}
+      ${statTile('rupee', '--brand', 'Total telephony cost', fmtInr(t.exotel_cost_inr_total), 'Exotel, all calls')}
+      ${statTile('rupee', '--warm', 'Total cost (blended)', fmtInr(t.total_cost_inr_total), 'AI cost + telephony cost above')}
+      ${statTile('target', '--hot', 'Cost per meeting booked', fmtInr(s.cost_per_meeting_inr), 'total cost ÷ meetings booked')}
+      ${statTile('target', '--out', 'Cost per completed meeting', fmtInr(s.cost_per_completed_meeting_inr), mo.completed ? 'total cost ÷ meetings marked completed' : 'mark a meeting completed on the Meetings page first')}
+      ${statTile('search', '--c-aqua', 'Avg RAG latency', fmtSec(lat.rag), lat.rag == null ? 'no RAG lookups recorded yet' : 'knowledge-base round trip')}
+      ${statTile('userCheck', '--brand', 'Returning caller rate', rc.returning_rate != null ? Math.round(rc.returning_rate * 100) + '%' : '—', `${rc.returning_contacts}/${rc.total_contacts} contacts have called more than once`)}
+      ${statTile('phoneCallback', '--warm', 'Avg calls per contact', rc.avg_calls_per_contact != null ? rc.avg_calls_per_contact.toFixed(2) : '—', 'across all contacts')}
+    </div>
+  `;
+
+  const trendHtml = `
+    <div class="chart-row">
+      ${chartCard('barChart', 'Call volume', 'last 14 days, by direction', renderLineChart(
+        [
+          { label: 'Inbound', color: 'var(--in)', values: s.daily_trend.map(d => d.calls_inbound) },
+          { label: 'Outbound', color: 'var(--out)', values: s.daily_trend.map(d => d.calls_outbound) },
+        ],
+        s.daily_trend.map(d => new Date(d.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })),
+        { labelEvery: 2 }
+      ))}
+      ${chartCard('rupee', 'Daily cost', 'last 14 days, blended ₹', renderLineChart(
+        [{ label: 'Total cost', color: 'var(--brand)', values: s.daily_trend.map(d => d.total_cost_inr) }],
+        s.daily_trend.map(d => new Date(d.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })),
+        { labelEvery: 2 }
+      ))}
+    </div>
+  `;
+
+  const perMinHtml = `
+    <div class="chart-row">
+      ${chartCard('barChart', 'Meetings booked by direction', 'count, and per contact reached', renderCategoryBarChart([
+        { label: 'Inbound', value: mb.inbound_count, color: 'var(--in)' },
+        { label: 'Outbound', value: mb.outbound_count, color: 'var(--out)' },
+      ]) + `<div class="legend"><span class="lswatch"><span class="ldot" style="background:var(--in)"></span>Inbound: ${mb.inbound_rate != null ? mb.inbound_rate.toFixed(2) : '—'} / contact</span><span class="lswatch"><span class="ldot" style="background:var(--out)"></span>Outbound: ${mb.outbound_rate != null ? mb.outbound_rate.toFixed(2) : '—'} / contact</span></div>`)}
+      ${chartCard('rupee', 'Avg cost per call', 'AI + telephony, all-in, ₹ per call', renderCategoryBarChart([
+        { label: 'Inbound', value: apc.inbound || 0, color: 'var(--in)' },
+        { label: 'Outbound', value: apc.outbound || 0, color: 'var(--out)' },
+      ], { formatValue: v => '₹' + v.toFixed(2) }))}
+      ${chartCard('clock', 'Avg cost per minute', 'AI + telephony, all-in, ₹ per minute', renderCategoryBarChart([
+        { label: 'Inbound', value: apm.inbound || 0, color: 'var(--in)' },
+        { label: 'Outbound', value: apm.outbound || 0, color: 'var(--out)' },
+      ], { formatValue: v => '₹' + v.toFixed(2) }))}
+    </div>
+  `;
+
+  const peakHtml = chartCard(
+    'clock', 'Peak inbound call hours', 'call volume by hour of day (IST)',
+    s.peak_inbound_hours.every(h => h.count === 0)
+      ? '<div class="chart-empty">No inbound calls recorded yet.</div>'
+      : renderSequenceBarChart(s.peak_inbound_hours.map(h => ({ label: HOUR_LABELS[h.hour], value: h.count })), { color: 'var(--c-blue)', labelEvery: 3 })
+  );
+
+  const timelineHtml = chartCard(
+    'calendarClock', 'Timeline of meetings booked', 'scheduled meeting dates',
+    s.meetings_timeline.length === 0
+      ? '<div class="chart-empty">No meetings booked yet.</div>'
+      : renderSequenceBarChart(s.meetings_timeline.map(d => ({
+          label: new Date(d.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+          value: d.count,
+        })), { color: 'var(--c-aqua)', labelEvery: s.meetings_timeline.length > 14 ? 2 : 1 })
+  );
+
+  const classificationHtml = chartCard(
+    'pieChart', 'Lead temperature', 'one lead = its most recent call’s classification',
+    (cls.Hot + cls.Warm + cls.Cold + cls.Uncategorized) === 0
+      ? '<div class="chart-empty">No classified leads yet.</div>'
+      : renderDonutChart([
+          { label: 'Hot', value: cls.Hot, color: 'var(--hot)' },
+          { label: 'Warm', value: cls.Warm, color: 'var(--warm)' },
+          { label: 'Cold', value: cls.Cold, color: 'var(--cold)' },
+          { label: 'Uncategorized', value: cls.Uncategorized, color: 'var(--gridline)' },
+        ])
+  );
+
+  const meetingOutcomesHtml = chartCard(
+    'calendarCheck', 'Meeting outcomes', 'marked from the Meetings page — never inferred automatically',
+    (mo.completed + mo.no_show + mo.pending) === 0
+      ? '<div class="chart-empty">No meetings booked yet.</div>'
+      : renderDonutChart([
+          { label: 'Completed', value: mo.completed, color: 'var(--out)' },
+          { label: 'No-show', value: mo.no_show, color: 'var(--hot)' },
+          { label: 'Pending', value: mo.pending, color: 'var(--gridline)' },
+        ])
+  );
+
+  const modelHtml = chartCard(
+    'cpu', 'Model performance', 'which engine/model handled the call — cost and latency per model',
+    renderModelTable(s.model_breakdown)
+  );
+
+  const callbacksHtml = chartCard(
+    'phoneCallback', 'Needs follow-up', 'contacts whose most recent call ended with a callback request still outstanding',
+    renderCallbacksTable(s.pending_callbacks)
+  );
+
+  document.getElementById('content').innerHTML = `
+    <div class="section-title">${icon('clock')}Today</div>
+    ${heroToday}
+    ${heroLive}
+    ${heroAreaCharts}
+    <div class="section-title">${icon('chat')}Activity</div>
+    ${heroActivity}
+    <div class="chart-row">${callOutcomesHtml}${aiInsightsHtml}</div>
+    <div class="section-title">${icon('rupee')}Overview</div>
+    ${totalsHtml}
+    <div class="section-title">${icon('barChart')}Trends</div>
+    ${trendHtml}
+    <div class="section-title">${icon('barChart')}Cost & conversion by direction</div>
+    ${perMinHtml}
+    <div class="section-title">${icon('clock')}Call timing</div>
+    <div class="chart-row">${peakHtml}${timelineHtml}</div>
+    <div class="section-title">${icon('pieChart')}Lead quality & language</div>
+    <div class="chart-row">${classificationHtml}${meetingOutcomesHtml}${languageHtml}</div>
+    <div class="section-title">${icon('cpu')}Model performance</div>
+    <div class="chart-row">${modelHtml}</div>
+    <div class="section-title">${icon('phoneCallback')}Needs follow-up</div>
+    <div class="chart-row">${callbacksHtml}</div>
+  `;
+
+  await refreshLiveCalls();
+}
+
+load();
+setInterval(load, 30000);
+setInterval(refreshLiveCalls, 5000);
+</script>
+</body>
+</html>

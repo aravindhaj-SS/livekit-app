@@ -1,0 +1,80 @@
+# Dedicated, isolated Ollama instance for Mira's dashboard AI insights
+# (core/insights.py, core/lead_insights.py — via core/ollama_client.py).
+#
+# Deliberately separate from the machine's shared ollama.service (port
+# 11434): that instance is tuned OLLAMA_NUM_PARALLEL=1 GLOBALLY for a
+# different, latency-critical single-stream voice agent — one request at a
+# time, across every model on it, forever. Routing Mira's dashboard traffic
+# through it would contend for that one inference slot and could stall
+# someone else's live call. This unit runs a second `ollama serve` process,
+# on its own port (127.0.0.1:11435), for Mira only.
+#
+# Reuses the shared instance's already-downloaded model blobs read-only
+# (OLLAMA_MODELS points at the same directory) — llama3.1:8b is already
+# pulled there, so this needs no separate download. Both instances share one
+# physical GPU (this machine has just the one), so if both happen to run
+# inference at the exact same moment there's ordinary CUDA-level compute
+# interleaving between the two processes — a much smaller effect than the
+# global request-queue serialization this setup avoids, and unavoidable
+# short of a second GPU.
+#
+# INSTALL (needs sudo):
+#   sudo cp deploy/ollama-mira.service /etc/systemd/system/ollama-mira.service
+#   sudo cp deploy/ollama_mira_warmup.sh /usr/local/bin/ollama_mira_warmup.sh
+#   sudo chmod +x /usr/local/bin/ollama_mira_warmup.sh
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ollama-mira.service
+#
+# VERIFY:
+#   curl http://127.0.0.1:11435/api/tags                 # instance is up
+#   OLLAMA_HOST=127.0.0.1:11435 ollama ps                 # llama3.1:8b, UNTIL "Forever"
+#   journalctl -u ollama-mira.service -f                  # watch startup/warmup
+#
+# REVERT:
+#   sudo systemctl disable --now ollama-mira.service
+#   sudo rm /etc/systemd/system/ollama-mira.service /usr/local/bin/ollama_mira_warmup.sh
+#   sudo systemctl daemon-reload
+
+[Unit]
+Description=Ollama Service (dedicated instance for Mira dashboard insights)
+After=network-online.target ollama.service
+
+[Service]
+Type=simple
+User=gignaati
+Group=gignaati
+
+ExecStart=/usr/local/bin/ollama serve
+# Fire-and-forget warmup — backgrounded (&) so it doesn't block systemd's
+# startup sequence while the model loads (~60s cold, one-time per service
+# start/restart since OLLAMA_KEEP_ALIVE below never lets it unload after).
+ExecStartPost=/bin/sh -c '/usr/local/bin/ollama_mira_warmup.sh &'
+
+Environment="OLLAMA_HOST=127.0.0.1:11435"
+# Same models directory the shared instance uses — read-only reuse of
+# already-pulled models (llama3.1:8b included), no duplicate download.
+Environment="OLLAMA_MODELS=/usr/share/ollama/.ollama/models"
+# Never time-unload the model — this instance exists solely to stay warm.
+# Safe to set service-wide here (unlike on the shared instance) since
+# nothing else uses this one.
+Environment="OLLAMA_KEEP_ALIVE=-1"
+# Single inference slot — Mira's own system prompts (core/insights.py,
+# core/lead_insights.py) are each static per module, so this lets their
+# prefix stay cached and reused turn to turn, same reasoning the shared
+# instance's own tuning already uses for its own static prompt.
+Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="OLLAMA_FLASH_ATTENTION=1"
+Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
+
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ollama-mira
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

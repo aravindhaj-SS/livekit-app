@@ -23,6 +23,16 @@ const ICON = {
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
   inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.4 5.3A2 2 0 0 1 7.2 4h9.6a2 2 0 0 1 1.8 1.3L21 12v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-6l2.4-6.7Z"/></svg>',
   cpu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>',
+  // Diagonal call-direction arrows — colored red (inbound) / green (outbound)
+  // via the wrapping element's CSS color, same convention as every other
+  // icon here. Points INTO the corner for inbound, OUT of it for outbound.
+  arrowIn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 9v9h9"/></svg>',
+  arrowOut: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18 18 6M9 6h9v9"/></svg>',
+  menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>',
+  barChart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18M8 17V10M13 17V6M18 17v-4"/></svg>',
+  pieChart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.2 15.3A10 10 0 1 1 12 2v10z"/></svg>',
+  wallet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7H4a1 1 0 0 0-1 1v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a1 1 0 0 0-1-1Z"/><path d="M20 7V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v2"/><circle cx="16" cy="13" r="1.5"/></svg>',
 };
 
 function icon(name, cls) {
@@ -76,9 +86,295 @@ function durationLabel(seconds) {
   return m > 0 ? `${m}m ${rem}s` : `${rem}s`;
 }
 
+function dateLabel(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return '—';
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+const CLASSIFICATION_RANK = { Hot: 3, Warm: 2, Cold: 1 };
+
+/** Groups a flat call list into one entry per contact (same phone number —
+ * see core/pending_calls.normalize_phone), most-recent call first within
+ * each group and across the returned list. Pass the FULL, unfiltered call
+ * list (both directions) so each contact's in/out counts are the true
+ * cross-direction totals, not just whatever a single direction-filtered
+ * dashboard happens to see — the caller filters the returned contacts down
+ * to its own direction afterward (see dashboard.html/dashboard_inbound.html).
+ *
+ * `latest` (the most recent call) is still exposed for things that are
+ * genuinely about "their current situation" — but classification and
+ * booking status are NOT that: they're achievements that must not regress
+ * just because a later call was a shorter, less-substantive conversation.
+ * Confirmed real bug: a contact booked+Hot on an earlier call, then had a
+ * brief unrelated call later that only reached Warm with no booking — the
+ * dashboard showed Warm and "no meeting", silently erasing what the
+ * earlier call achieved. `bestClassification`/`everBooked`/
+ * `bookedMeetingLink` are computed across the WHOLE group specifically to
+ * fix that; `displayName`/`displayCompany` similarly use the latest call
+ * that actually HAS a value, not blindly the latest call overall (a repeat
+ * caller who didn't repeat their name shouldn't make an already-known name
+ * disappear). */
+function groupCallsByContact(allCalls) {
+  const groups = new Map();
+  for (const c of allCalls) {
+    const key = c.normalized_phone || c.phone_number || `id:${c.id}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(c);
+  }
+  const contacts = [];
+  for (const [key, group] of groups) {
+    group.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+    let bestClassification = null, bestRank = 0;
+    let everBooked = false, bookedMeetingLink = null, bookedAt = null;
+    let displayName = null, displayCompany = null, displayBudget = null, displayTimeline = null, displayDM = null;
+    let displayInterestArea = null, displayEmail = null;
+    let totalCostInr = 0;
+    for (const c of group) {
+      const rank = CLASSIFICATION_RANK[c.classification] || 0;
+      if (rank > bestRank) { bestRank = rank; bestClassification = c.classification; }
+      if (c.discovery_call_scheduled) {
+        everBooked = true;
+        const t = c.updated_at || c.created_at;
+        if (!bookedAt || new Date(t) > new Date(bookedAt)) { bookedMeetingLink = c.meeting_link; bookedAt = t; }
+      }
+      // Latest call that actually HAS a value, not blindly the latest call
+      // overall — a returning caller's brief follow-up call not re-stating
+      // their budget/timeline/name shouldn't blank out what an earlier call
+      // already captured.
+      if (!displayName && c.name) displayName = c.name;
+      if (!displayCompany && c.company) displayCompany = c.company;
+      if (!displayBudget && c.budget) displayBudget = c.budget;
+      if (!displayTimeline && c.timeline) displayTimeline = c.timeline;
+      if (!displayDM && c.decision_maker_status) displayDM = c.decision_maker_status;
+      if (!displayInterestArea && c.interest_area) displayInterestArea = c.interest_area;
+      if (!displayEmail && c.email_id) displayEmail = c.email_id;
+      totalCostInr += Number(c.total_cost_inr) || 0;
+    }
+
+    contacts.push({
+      key,
+      latest: group[0],
+      calls: group,
+      inboundCount: group.filter(c => c.direction === 'inbound').length,
+      outboundCount: group.filter(c => c.direction === 'outbound').length,
+      displayName: displayName || group[0].name,
+      displayCompany: displayCompany || group[0].company,
+      displayBudget: displayBudget || group[0].budget,
+      displayTimeline: displayTimeline || group[0].timeline,
+      displayDecisionMaker: displayDM || group[0].decision_maker_status,
+      displayInterestArea: displayInterestArea || group[0].interest_area,
+      displayEmail: displayEmail || group[0].email_id,
+      bestClassification,
+      everBooked,
+      bookedMeetingLink,
+      totalCostInr,
+    });
+  }
+  contacts.sort((a, b) => new Date(b.latest.created_at || 0) - new Date(a.latest.created_at || 0));
+  return contacts;
+}
+
+/** Red-inbound / green-outbound call-count pair, shown in place of a flat
+ * "N calls" total so both directions are visible at a glance. */
+function callCountBadge(contact) {
+  return `<span class="call-counts">
+    <span class="ccount in" title="${contact.inboundCount} inbound call${contact.inboundCount === 1 ? '' : 's'}">${icon('arrowIn')}${contact.inboundCount}</span>
+    <span class="ccount out" title="${contact.outboundCount} outbound call${contact.outboundCount === 1 ? '' : 's'}">${icon('arrowOut')}${contact.outboundCount}</span>
+  </span>`;
+}
+
+/** Full per-call detail — everything from "Call overview" through
+ * "Transcript" for ONE call. Shared by both dashboards' detail panels
+ * (identical section-for-section except which icon/label fronts the
+ * interest section — outbound calls already know why they're calling,
+ * inbound calls are finding out live) so the two pages can't drift out of
+ * sync on what a call's detail actually shows. `opts.interestIcon`/
+ * `opts.interestLabel` carry that one difference. */
+function renderCallDetailSections(c, opts) {
+  // AI cost shown in INR, derived from the two top-level totals (never an
+  // independent $->₹ conversion) so this figure plus Telephony cost always
+  // sums exactly to Total cost below — no rounding-drift, no second
+  // exchange-rate figure to keep in sync.
+  const aiCostInr = (c.total_cost_inr != null && c.exotel_cost_inr != null)
+    ? '₹' + (Number(c.total_cost_inr) - Number(c.exotel_cost_inr)).toFixed(2) : '—';
+  const exotelCost = c.exotel_cost_inr != null ? '₹' + Number(c.exotel_cost_inr).toFixed(2) : '—';
+  const totalCostV = c.total_cost_inr != null ? '₹' + Number(c.total_cost_inr).toFixed(2) : '—';
+  const latency = c.avg_latency_s != null ? Number(c.avg_latency_s).toFixed(2) + 's' : '—';
+  const durationS = c.lead_state?.call_metrics?.call_duration_s;
+  // Derived from total_cost_inr / duration rather than the stored
+  // blended_cost_per_min_inr field — that field only exists on calls
+  // processed after it was added; this way every historical call still
+  // shows a per-minute figure, not a blank dash.
+  const perMinLabel = (c.total_cost_inr != null && durationS > 0)
+    ? '₹' + (Number(c.total_cost_inr) / (durationS / 60)).toFixed(2) + ' /min' : '—';
+  const duration = durationLabel(durationS);
+  const turns = (c.transcript || []).length;
+
+  const priced = c.engine
+    ? `<p class="priced-against">Priced against <code>${esc(c.engine)}</code> / <code>${esc(c.model || '—')}</code></p>`
+    : '';
+
+  const recordingHtml = c.recording_url
+    ? `<audio controls src="${c.recording_url}"></audio>`
+    : `<p class="no-recording">No recording available for this call.</p>`;
+
+  const transcriptHtml = (c.transcript || []).length
+    ? `<div class="transcript">${c.transcript.map(m => `<div class="msg ${m.role}"><span class="role">${m.role}</span>${esc(m.content)}</div>`).join('')}</div>`
+    : `<p class="no-recording">No transcript captured.</p>`;
+
+  const u = c.usage || {};
+  const n = (v) => v ?? 0;
+  const totalInput = n(u.text_input) + n(u.audio_input);
+  const totalOutput = n(u.text_output) + n(u.audio_output);
+  const tokenUsageHtml = c.usage ? `
+    <div class="tiles">
+      <div class="tile">${icon('cpu', 'ticon')}<div class="tlabel">Total input tokens</div><div class="tval">${totalInput.toLocaleString()}</div></div>
+      <div class="tile">${icon('cpu', 'ticon')}<div class="tlabel">Total output tokens</div><div class="tval">${totalOutput.toLocaleString()}</div></div>
+    </div>
+    <table class="utable">
+      <thead><tr><th>Breakdown</th><th>Total</th><th>Cached</th></tr></thead>
+      <tbody>
+        <tr><td>Text input</td><td>${n(u.text_input).toLocaleString()}</td><td>${n(u.text_input_cached).toLocaleString()}</td></tr>
+        <tr><td>Audio input</td><td>${n(u.audio_input).toLocaleString()}</td><td>${n(u.audio_input_cached).toLocaleString()}</td></tr>
+        <tr><td>Text output</td><td>${n(u.text_output).toLocaleString()}</td><td>—</td></tr>
+        <tr><td>Audio output</td><td>${n(u.audio_output).toLocaleString()}</td><td>—</td></tr>
+        <tr class="total"><td>Total</td><td>${(totalInput + totalOutput).toLocaleString()}</td><td></td></tr>
+      </tbody>
+    </table>
+  ` : `<p class="no-recording">No token usage recorded for this call.</p>`;
+
+  return `
+    <div class="section">
+      <h3>${icon(c.direction === 'inbound' ? 'phoneIn' : 'phoneOut')}Call overview</h3>
+      <div class="tiles">
+        <div class="tile" style="--tile-accent: var(--cold)">${icon('clock', 'ticon')}<div class="tlabel">Duration</div><div class="tval">${duration}</div></div>
+        <div class="tile" style="--tile-accent: var(--good)">${icon('chat', 'ticon')}<div class="tlabel">Turns</div><div class="tval">${turns}</div></div>
+      </div>
+      <dl class="kv" style="margin-top:0.7rem">
+        <dt>${icon('globe')}Language</dt><dd>${fmt(c.preferred_language)}</dd>
+      </dl>
+    </div>
+    <div class="section">
+      <h3>${icon(opts.interestIcon)}${opts.interestLabel}</h3>
+      <dl class="kv">
+        <dt>Interest area</dt><dd>${fmt(c.interest_area)}</dd>
+        <dt>${icon('mail')}Email</dt><dd>${fmt(c.email_id)}</dd>
+      </dl>
+    </div>
+    <div class="section">
+      <h3>${icon('userCheck')}Qualification</h3>
+      <dl class="kv">
+        <dt>Budget</dt><dd>${fmt(c.budget)}</dd>
+        <dt>Timeline</dt><dd>${fmt(c.timeline)}</dd>
+        <dt>Decision maker</dt><dd>${fmt(c.decision_maker_status)}</dd>
+      </dl>
+    </div>
+    ${c.callback_time ? `
+    <div class="section">
+      <h3>${icon('phoneCallback')}Callback requested</h3>
+      <dl class="kv"><dt>Time</dt><dd>${esc(c.callback_time)}</dd></dl>
+    </div>` : ''}
+    <div class="section">
+      <h3>${icon('rupee')}Cost &amp; latency</h3>
+      ${priced}
+      <div class="tiles">
+        <div class="tile"><div class="tlabel">AI cost</div><div class="tval">${aiCostInr}</div><div class="tsub">Gemini / OpenAI tokens</div></div>
+        <div class="tile"><div class="tlabel">Telephony cost</div><div class="tval">${exotelCost}</div><div class="tsub">Exotel, per-minute</div></div>
+        <div class="tile"><div class="tlabel">Total cost</div><div class="tval">${totalCostV}</div><div class="tsub">Blended, INR</div></div>
+        <div class="tile"><div class="tlabel">Cost / min</div><div class="tval">${perMinLabel}</div><div class="tsub">AI + telephony, blended</div></div>
+        <div class="tile"><div class="tlabel">Avg latency / turn</div><div class="tval">${latency}</div><div class="tsub">Time to first audio</div></div>
+      </div>
+    </div>
+    <div class="section">
+      <h3>${icon('cpu')}Token usage</h3>
+      ${tokenUsageHtml}
+    </div>
+    <div class="section">
+      <h3>${icon('mic')}Recording</h3>
+      ${recordingHtml}
+    </div>
+    <div class="section">
+      <h3>${icon('chat')}Transcript</h3>
+      ${transcriptHtml}
+    </div>
+  `;
+}
+
+// ── Multi-call contact detail panel — shared state + renderer ──────────────
+// A contact (see groupCallsByContact) can have several calls; the panel
+// shows a compact row per call plus one expanded call's full detail
+// (renderCallDetailSections above), accordion-style, most recent expanded
+// by default rather than dumping every call's full transcript/tokens at once.
+let _detailContact = null;
+let _detailOpts = null;
+let _expandedCallIdx = 0;
+
+function openContactDetail(contact, opts) {
+  _detailContact = contact;
+  _detailOpts = opts;
+  _expandedCallIdx = 0;
+  // Header represents the CONTACT overall, so it uses the aggregated
+  // best-ever classification/name (see groupCallsByContact) — not
+  // contact.latest, which can be a shorter, less-substantive call that
+  // shouldn't override what an earlier call already established.
+  document.getElementById('d-avatar-wrap').innerHTML = avatar(contact.displayName, contact.bestClassification).replace('class="avatar"', 'class="avatar davatar"');
+  document.getElementById('d-name').textContent = contact.displayName || opts.unknownLabel || 'Unknown';
+  document.getElementById('d-sub').innerHTML = `${esc(contact.latest.phone_number) || ''}${callCountBadge(contact)}`;
+  _renderContactDetailBody();
+  document.getElementById('detail').classList.add('open');
+  document.getElementById('overlay').classList.add('open');
+}
+
+function _renderContactDetailBody() {
+  const contact = _detailContact;
+  const opts = _detailOpts;
+  const rows = contact.calls.map((c, idx) => {
+    const expanded = idx === _expandedCallIdx;
+    return `
+      <div class="call-row ${expanded ? 'expanded' : ''}" onclick="toggleCallDetail(${idx})">
+        <span class="crow-dir" style="color: var(${c.direction === 'inbound' ? '--hot' : '--good'})">${icon(c.direction === 'inbound' ? 'arrowIn' : 'arrowOut')}</span>
+        <span class="crow-date">${dateLabel(c.created_at)}</span>
+        ${classificationTag(c.classification)}
+        ${meetingBadge(c)}
+        <span class="crow-cost mono">${c.total_cost_inr != null ? '₹' + Number(c.total_cost_inr).toFixed(2) : '—'}</span>
+      </div>
+      ${expanded ? `<div class="call-detail-expanded">${renderCallDetailSections(c, opts)}</div>` : ''}
+    `;
+  }).join('');
+
+  document.getElementById('d-body').innerHTML = `
+    <div class="section calls-list-section">
+      <h3>${icon('chat')}Calls with this contact (${contact.calls.length})</h3>
+      <div class="calls-list">${rows}</div>
+    </div>
+  `;
+}
+
+function toggleCallDetail(idx) {
+  _expandedCallIdx = (_expandedCallIdx === idx) ? -1 : idx;
+  _renderContactDetailBody();
+}
+
+/** Shared stat-card component — used by the master dashboard's Overview/
+ * Today sections AND (via renderKpiRow below) every other dashboard's KPI
+ * strip, so a "stat card" only has one visual definition anywhere in the
+ * app, at one size (see dashboard-light.css's .stat-tile). */
+function statTile(iconName, accentVar, label, val, sub) {
+  return `<div class="stat-tile" style="--stat-accent: var(${accentVar})">
+    ${icon(iconName, 'sicon')}
+    <div class="slabel">${esc(label)}</div>
+    <div class="sval">${val}</div>
+    <div class="ssub">${sub || ''}</div>
+  </div>`;
+}
+
 /** Aggregate KPI strip — computed client-side from the already-loaded call
  * list, no extra backend calls. `extraKpis` lets each page add one or two
- * direction-specific tiles after the shared ones. */
+ * direction-specific tiles after the shared ones. Renders via statTile()
+ * (see above) so this looks identical to every other stat card in the app. */
 function renderKpiRow(calls, extraKpis) {
   const totalCalls = calls.length;
   const hot = calls.filter(c => c.classification === 'Hot').length;
@@ -88,22 +384,18 @@ function renderKpiRow(calls, extraKpis) {
   const avgLatency = latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null;
 
   const kpis = [
-    { icon: 'phoneOut', accent: 'var(--gold)', label: 'Total calls', val: totalCalls.toLocaleString(), sub: 'in this view' },
-    { icon: 'flame', accent: 'var(--hot)', label: 'Hot leads', val: hot.toLocaleString(), sub: totalCalls ? `${Math.round(hot / totalCalls * 100)}% of calls` : '—' },
-    { icon: 'calendarCheck', accent: 'var(--good)', label: 'Meetings booked', val: booked.toLocaleString(), sub: totalCalls ? `${Math.round(booked / totalCalls * 100)}% conversion` : '—' },
-    { icon: 'rupee', accent: 'var(--gold)', label: 'Total cost', val: '₹' + totalCostInr.toFixed(0), sub: booked ? `₹${(totalCostInr / booked).toFixed(0)} / meeting` : 'AI + telephony' },
-    { icon: 'clock', accent: 'var(--cold)', label: 'Avg latency', val: avgLatency != null ? avgLatency.toFixed(2) + 's' : '—', sub: 'time to first audio' },
+    { icon: 'phoneOut', accent: '--brand', label: 'Total calls', val: totalCalls.toLocaleString(), sub: 'in this view' },
+    { icon: 'flame', accent: '--hot', label: 'Hot leads', val: hot.toLocaleString(), sub: totalCalls ? `${Math.round(hot / totalCalls * 100)}% of calls` : '—' },
+    { icon: 'calendarCheck', accent: '--out', label: 'Meetings booked', val: booked.toLocaleString(), sub: totalCalls ? `${Math.round(booked / totalCalls * 100)}% conversion` : '—' },
+    { icon: 'rupee', accent: '--warm', label: 'Total cost', val: '₹' + totalCostInr.toFixed(0), sub: booked ? `₹${(totalCostInr / booked).toFixed(0)} / meeting` : 'AI + telephony' },
+    { icon: 'clock', accent: '--cold', label: 'Avg latency', val: avgLatency != null ? avgLatency.toFixed(2) + 's' : '—', sub: 'time to first audio' },
     ...(extraKpis || []),
   ];
 
-  return kpis.map(k => `
-    <div class="kpi" style="--kpi-accent:${k.accent}">
-      ${icon(k.icon, 'kicon')}
-      <div class="klabel">${k.label}</div>
-      <div class="kval">${k.val}</div>
-      <div class="ksub">${k.sub}</div>
-    </div>
-  `).join('');
+  // Returns just the tiles — the caller's container element carries the
+  // .stat-grid class itself (see dashboard.html/dashboard_inbound.html's
+  // #kpis div), same convention dashboard_master.html already uses.
+  return kpis.map(k => statTile(k.icon, k.accent, k.label, k.val, k.sub)).join('');
 }
 
 /** Small inline sparkline of call volume for the last 14 days — a genuine
@@ -122,7 +414,7 @@ function renderTrendCard(calls, label) {
     if (diff >= 0 && diff < days) buckets[days - 1 - diff]++;
   }
   const max = Math.max(1, ...buckets);
-  const w = 600, h = 36, step = w / (days - 1);
+  const w = 600, h = 30, step = w / (days - 1);
   const points = buckets.map((v, i) => `${(i * step).toFixed(1)},${(h - (v / max) * h).toFixed(1)}`).join(' ');
   const area = `0,${h} ${points} ${w},${h}`;
   const total = buckets.reduce((a, b) => a + b, 0);
@@ -131,8 +423,8 @@ function renderTrendCard(calls, label) {
     <div class="trend-card">
       <div class="tlabel">${icon('cpu')}${label} — last 14 days</div>
       <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
-        <polygon points="${area}" fill="var(--gold)" opacity="0.12"></polygon>
-        <polyline points="${points}" fill="none" stroke="var(--gold)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+        <polygon points="${area}" fill="var(--brand)" opacity="0.12"></polygon>
+        <polyline points="${points}" fill="none" stroke="var(--brand)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
       </svg>
       <div class="tcount">${total} calls</div>
     </div>
@@ -245,4 +537,116 @@ async function chooseModel(engine, model) {
   // very next call for this direction. Just refresh the badge/picker state.
   status.innerHTML = `${icon('calendarCheck')} Saved — ${esc(label)} applies to the next call.`;
   setTimeout(() => window.location.reload(), 900);
+}
+
+/** Full weekday+date+time formatter for a meeting's preferred_slot ISO
+ * string — shared by the Meetings page and the Leads insight panel so both
+ * format the same kind of value identically. */
+function meetingDateLabel(iso) {
+  if (!iso) return '<span class="muted">—</span>';
+  const d = new Date(iso);
+  if (isNaN(d)) return '<span class="muted">—</span>';
+  return d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function levelBadge(level) {
+  if (!level) return '<span class="level-badge unknown">Unknown</span>';
+  return `<span class="level-badge ${esc(level)}">${esc(level)}</span>`;
+}
+
+/** Leads page insight panel body (see static/dashboard_leads.html) — combines
+ * a contact's own deterministic facts (echoed back from core/lead_insights.
+ * compute_lead_facts, same numbers already on the Leads row, just shown in
+ * full here) with the AI-generated read from POST /api/leads/insights.
+ * insight is null while that request is still in flight — callers render
+ * once with insight=null for an immediate loading state, then again once it
+ * resolves, rather than blocking the panel open on the AI call. */
+function renderLeadInsightBody(contact, insight) {
+  const facts = (insight && insight.facts) || {};
+  const lastCall = contact.calls[contact.calls.length - 1];
+
+  const aiSection = !insight ? `
+    <div class="section">
+      <h3>${icon('barChart')}AI analysis</h3>
+      <div class="insight-loading"><span class="spinner"></span>Analyzing calls…</div>
+    </div>
+  ` : insight.generated ? `
+    <div class="section">
+      <h3>${icon('barChart')}AI analysis</h3>
+      <p class="insight-summary">${fmt(insight.summary, 'No summary available.')}</p>
+      <div class="badge-row">
+        <div><div class="mini-label">Interest level</div>${levelBadge(insight.interest_level)}</div>
+        <div><div class="mini-label">Conversion potential</div>${levelBadge(insight.conversion_potential)}</div>
+      </div>
+      ${insight.conversion_reason ? `<p class="insight-reason">${esc(insight.conversion_reason)}</p>` : ''}
+      ${insight.intent ? `<dl class="kv" style="margin-top:0.8rem"><dt>${icon('target')}Intent</dt><dd>${esc(insight.intent)}</dd></dl>` : ''}
+    </div>
+    <div class="section">
+      <h3>${icon('chat')}Things they've asked about</h3>
+      ${(insight.enquiries || []).length
+        ? `<div class="insight-list">${insight.enquiries.map(e => `<div class="insight-list-item">${esc(e)}</div>`).join('')}</div>`
+        : '<div class="insight-unavailable">Nothing specific captured yet.</div>'}
+    </div>
+    ${(insight.notes || []).length ? `
+    <div class="section">
+      <h3>${icon('userCheck')}Other notes</h3>
+      <div class="insight-list">${insight.notes.map(n => `<div class="insight-list-item">${esc(n)}</div>`).join('')}</div>
+    </div>` : ''}
+  ` : `
+    <div class="section">
+      <h3>${icon('barChart')}AI analysis</h3>
+      <div class="insight-unavailable">AI analysis unavailable right now — showing captured facts only.</div>
+    </div>
+  `;
+
+  return `
+    <div class="section">
+      <h3>${icon('userCheck')}Lead overview</h3>
+      <div class="tiles">
+        <div class="tile"><div class="tlabel">Total calls</div><div class="tval">${facts.total_calls ?? contact.calls.length}</div><div class="tsub">${facts.inbound_calls ?? contact.inboundCount} in &middot; ${facts.outbound_calls ?? contact.outboundCount} out</div></div>
+        <div class="tile"><div class="tlabel">Total cost</div><div class="tval">${facts.total_cost_inr != null ? '₹' + Number(facts.total_cost_inr).toFixed(2) : '—'}</div><div class="tsub">AI + telephony, all calls</div></div>
+      </div>
+      <dl class="kv" style="margin-top:0.7rem">
+        <dt>${icon('mail')}Email</dt><dd>${fmt(contact.displayEmail)}</dd>
+        <dt>Interest area</dt><dd>${fmt(facts.interest_area || contact.displayInterestArea)}</dd>
+        <dt>First contact</dt><dd>${dateLabel(facts.first_contact_at || (lastCall && lastCall.created_at))}</dd>
+        <dt>Last contact</dt><dd>${dateLabel(facts.last_contact_at || contact.latest.created_at)}</dd>
+      </dl>
+    </div>
+    <div class="section">
+      <h3>${icon('userCheck')}Qualification</h3>
+      <dl class="kv">
+        <dt>Budget</dt><dd>${fmt(facts.budget || contact.displayBudget)}</dd>
+        <dt>Timeline</dt><dd>${fmt(facts.timeline || contact.displayTimeline)}</dd>
+        <dt>Decision maker</dt><dd>${fmt(facts.decision_maker_status || contact.displayDecisionMaker)}</dd>
+      </dl>
+    </div>
+    <div class="section">
+      <h3>${icon('calendarClock')}Meeting &amp; scheduling</h3>
+      <dl class="kv">
+        <dt>Status</dt><dd>${meetingBadge({ discovery_call_scheduled: facts.ever_booked_meeting ?? contact.everBooked, meeting_link: facts.meeting_link || contact.bookedMeetingLink })}</dd>
+        <dt>Meeting date</dt><dd>${meetingDateLabel(facts.meeting_date)}</dd>
+        <dt>Reschedules</dt><dd>${facts.reschedule_count ?? 0}</dd>
+      </dl>
+    </div>
+    ${aiSection}
+  `;
+}
+
+/** Collapsible sidebar — shared across all four dashboard pages. Persists
+ * collapsed/expanded state in localStorage so it doesn't reset every page
+ * navigation (each page is a separate document load, no client-side
+ * router). Call once per page after the sidebar markup is in the DOM. */
+function initSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const toggle = document.getElementById('sidebar-toggle');
+  if (!sidebar || !toggle) return;
+  toggle.innerHTML = icon('menu');
+  if (localStorage.getItem('mira-sidebar-collapsed') === '1') {
+    sidebar.classList.add('collapsed');
+  }
+  toggle.addEventListener('click', () => {
+    sidebar.classList.toggle('collapsed');
+    localStorage.setItem('mira-sidebar-collapsed', sidebar.classList.contains('collapsed') ? '1' : '0');
+  });
 }
